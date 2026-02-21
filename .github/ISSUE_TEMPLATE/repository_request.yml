@@ -1,0 +1,98 @@
+name: 🏗 Repository Creation Request
+description: Request creation of a new repository under the organization
+title: "[REPO-REQUEST] "
+labels: ["repo-request", "platform-triage"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📦 Repository Creation Request
+
+        Please complete all required fields. 
+        The platform team will review and provision the repository.
+
+  - type: dropdown
+    id: product_line
+    attributes:
+      label: Product Line
+      description: Select the product line this repository belongs to
+      options:
+        - ewallet
+        - hyperconfigurator
+    validations:
+      required: true
+
+  - type: dropdown
+    id: aspect
+    attributes:
+      label: Aspect / Domain
+      description: Select the primary aspect of this repository
+      options:
+        - backend
+        - frontend
+        - flutter
+        - platform
+        - testing
+        - documentation
+    validations:
+      required: true
+
+  - type: input
+    id: repository_name
+    attributes:
+      label: Repository Name
+      description: Enter the desired repository name (kebab-case recommended)
+      placeholder: my-awesome-service
+    validations:
+      required: true
+
+  - type: input
+    id: tenant_name
+    attributes:
+      label: Tenant Name (Optional)
+      description: Provide tenant/client name if this is tenant-specific
+      placeholder: tenant-alpha
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Repository Description
+      description: Provide a short description of the repository purpose
+      placeholder: This repository will host my awesome microservice.
+    validations:
+      required: true
+
+  - type: textarea
+    id: justification
+    attributes:
+      label: Business / Technical Justification
+      description: Explain why a new repository is required
+      placeholder: Separate repo required due to independent deployment lifecycle.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: compliance
+    attributes:
+      label: Compliance Checklist
+      options:
+        - label: Naming convention reviewed
+          required: true
+        - label: Repository ownership team identified
+          required: true
+        - label: Security review required
+        - label: Infra provisioning required
+
+  - type: dropdown
+    id: visibility
+    attributes:
+      label: Repository Visibility
+      description: Select visibility level
+      options:
+        - Private
+        - Internal (Enterprise only)
+    validations:
+      required: true
