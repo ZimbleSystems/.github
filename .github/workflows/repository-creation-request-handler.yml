@@ -1,14 +1,150 @@
-name: DEBUG ISSUE
+name: Repository Creation Processor
 
 on:
-  push:
-    branches:
-      - main
-  issues:
-    types: [opened]
+    issues:
+        types: [opened]
+
+permissions:
+    contents: write
+    issues: write
+    # administration: write
 
 jobs:
-  debug:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Triggered"
+    validate-and-prepare:
+        if: >
+            contains(github.event.issue.labels.*.name, 'repo-creation-request')
+            && startsWith(github.event.issue.title, '[REPO-CREATION-REQUEST]')
+        runs-on: ubuntu-latest
+        outputs:
+            repo_name: ${{ steps.prepare.outputs.repo_name }}
+            visibility: ${{ steps.prepare.outputs.visibility }}
+            description: ${{ steps.prepare.outputs.description }}
+
+        steps:
+            - name: Parse Issue Form Fields
+              id: prepare
+              run: |
+                  BODY="${{ github.event.issue.body }}"
+
+                  PRODUCT=$(echo "$BODY" | awk '/Product Line/{getline; print}' | xargs)
+                  ASPECT=$(echo "$BODY" | awk '/Aspect \/ Domain/{getline; print}' | xargs)
+                  NAME=$(echo "$BODY" | awk '/Repository Name/{getline; print}' | xargs)
+                  TENANT=$(echo "$BODY" | awk '/Tenant Name/{getline; print}' | xargs)
+                  VISIBILITY=$(echo "$BODY" | awk '/Repository Visibility/{getline; print}' | xargs)
+                  DESCRIPTION=$(echo "$BODY" | awk '/Repository Description/{getline; print}' | xargs)
+
+                  if [ -z "$PRODUCT" ] || [ -z "$ASPECT" ] || [ -z "$NAME" ]; then
+                    echo "Missing mandatory fields"
+                    exit 1
+                  fi
+
+                  if [[ ! "$NAME" =~ ^[a-z0-9-]+$ ]]; then
+                    echo "Repository name must be kebab-case (lowercase letters, numbers, hyphens only)"
+                    exit 1
+                  fi
+
+                  if [ -n "$TENANT" ]; then
+                    FINAL_NAME="$PRODUCT-$ASPECT-$NAME-$TENANT"
+                  else
+                    FINAL_NAME="$PRODUCT-$ASPECT-$NAME"
+                  fi
+
+                  # Normalize visibility
+                  if [[ "$VISIBILITY" == *"Private"* ]]; then
+                    VIS="private"
+                  else
+                    VIS="internal"
+                  fi
+
+                  echo "repo_name=$FINAL_NAME" >> $GITHUB_OUTPUT
+                  echo "visibility=$VIS" >> $GITHUB_OUTPUT
+                  echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+
+                  echo "Final repo name: $FINAL_NAME"
+                  echo "Visibility: $VIS"
+
+    create-repository:
+        needs: validate-and-prepare
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Check if repository already exists
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      try {
+                        await github.rest.repos.get({
+                          owner: context.repo.owner,
+                          repo: "${{ needs.validate-and-prepare.outputs.repo_name }}"
+                        });
+                        core.setFailed("❌ Repository already exists.");
+                      } catch (error) {
+                        console.log("Repository does not exist. Safe to create.");
+                      }
+
+            - name: Create Repository in Organization
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      await github.rest.repos.createInOrg({
+                        org: context.repo.owner,
+                        name: "${{ needs.validate-and-prepare.outputs.repo_name }}",
+                        description: "${{ needs.validate-and-prepare.outputs.description }}",
+                        visibility: "${{ needs.validate-and-prepare.outputs.visibility }}",
+                        auto_init: true
+                      });
+
+            # - name: Add Default Team Access
+            #   uses: actions/github-script@v7
+            #   with:
+            #       script: |
+            #           await github.rest.teams.addOrUpdateRepoPermissionsInOrg({
+            #             org: context.repo.owner,
+            #             team_slug: "platform-triage",
+            #             owner: context.repo.owner,
+            #             repo: "${{ needs.validate-and-prepare.outputs.repo_name }}",
+            #             permission: "maintain"
+            #           });
+
+            - name: Enable Basic Branch Protection
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      await github.rest.repos.updateBranchProtection({
+                        owner: context.repo.owner,
+                        repo: "${{ needs.validate-and-prepare.outputs.repo_name }}",
+                        branch: "main",
+                        required_status_checks: null,
+                        enforce_admins: true,
+                        required_pull_request_reviews: {
+                          required_approving_review_count: 1
+                        },
+                        restrictions: null
+                      });
+
+            - name: Comment Success on Issue
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      await github.rest.issues.createComment({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: context.issue.number,
+                        body: "✅ Repository successfully created: `${{ needs.validate-and-prepare.outputs.repo_name }}`"
+                      })
+
+    handle-failure:
+        needs: [validate-and-prepare, create-repository]
+        if: failure()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Comment Failure on Issue
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      await github.rest.issues.createComment({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: context.issue.number,
+                        body: "❌ Repository creation failed. Please review workflow logs."
+                      })
