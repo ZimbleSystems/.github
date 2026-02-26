@@ -61,17 +61,15 @@ jobs:
               const visibilityRaw = extract("Repository Visibility");
 
               if (!product || !aspect || !name || !description || !visibilityRaw) {
-                return {
-                  status: "PARSE_ERROR",
-                  message: "Missing required fields."
-                };
+                core.setOutput("status", "PARSE_ERROR");
+                core.setOutput("message", "Missing required fields.");
+                return;
               }
 
               if (!/^[a-z0-9-]+$/.test(name)) {
-                return {
-                  status: "PARSE_ERROR",
-                  message: "Repository name must be kebab-case."
-                };
+                core.setOutput("status", "PARSE_ERROR");
+                core.setOutput("message", "Repository name must be kebab-case.");
+                return;
               }
 
               const finalName = tenant
@@ -86,10 +84,9 @@ jobs:
                   repo: finalName
                 });
 
-                return {
-                  status: "DUPLICATE",
-                  message: "Repository already exists."
-                };
+                core.setOutput("status", "DUPLICATE");
+                core.setOutput("message", "Repository already exists.");
+                return;
 
               } catch (duplicateCheckError) {
 
@@ -97,10 +94,10 @@ jobs:
                   console.log("No duplicate found.");
                 } else {
                   console.error("Duplicate check failed:", duplicateCheckError.message);
-                  return {
-                    status: "ERROR",
-                    message: `Duplicate verification failed: ${duplicateCheckError.message}`
-                  };
+
+                  core.setOutput("status", "ERROR");
+                  core.setOutput("message", `Duplicate verification failed: ${duplicateCheckError.message}`);
+                  return;
                 }
               }
 
@@ -116,19 +113,15 @@ jobs:
 
               console.log("Repository created:", repo.data.html_url);
 
-              return {
-                status: "SUCCESS",
-                message: "Repository created successfully.",
-                repo_url: repo.data.html_url
-              };
+              core.setOutput("status", "SUCCESS");
+              core.setOutput("repo_url", repo.data.html_url);
+              core.setOutput("message", "Repository created successfully.");
 
             } catch (unhandledError) {
               console.error("Unhandled error:", unhandledError.message);
 
-              return {
-                status: "ERROR",
-                message: unhandledError.message
-              };
+              core.setOutput("status", "ERROR");
+              core.setOutput("message", unhandledError.message);
             }
 
   finalize:
