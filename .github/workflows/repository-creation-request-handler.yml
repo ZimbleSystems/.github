@@ -16,7 +16,7 @@ jobs:
       startsWith(github.event.issue.title, '[REPO-CREATION-REQUEST]')
     runs-on: ubuntu-latest
     outputs:
-      result: ${{ steps.logic.outputs.result }}
+      status: ${{ steps.logic.outputs.status }}
       message: ${{ steps.logic.outputs.message }}
       repo_url: ${{ steps.logic.outputs.repo_url }}
 
@@ -56,13 +56,13 @@ jobs:
               const visibilityRaw = extract("Repository Visibility");
 
               if (!product || !aspect || !name || !description || !visibilityRaw) {
-                core.setOutput("result", "PARSE_ERROR");
+                core.setOutput("status", "PARSE_ERROR");
                 core.setOutput("message", "Missing required fields.");
                 return;
               }
 
               if (!/^[a-z0-9-]+$/.test(name)) {
-                core.setOutput("result", "PARSE_ERROR");
+                core.setOutput("status", "PARSE_ERROR");
                 core.setOutput("message", "Repository name must be kebab-case.");
                 return;
               }
@@ -78,7 +78,7 @@ jobs:
                   repo: finalName
                 });
 
-                core.setOutput("result", "DUPLICATE");
+                core.setOutput("status", "DUPLICATE");
                 core.setOutput("message", "Repository already exists.");
                 return;
 
@@ -93,13 +93,13 @@ jobs:
                 auto_init: true
               });
 
-              core.setOutput("result", "SUCCESS");
+              core.setOutput("status", "SUCCESS");
               console.log("SETTING RESULT TO SUCCESS");
               core.setOutput("repo_url", repo.data.html_url);
               core.setOutput("message", "Repository created successfully.");
 
             } catch (err) {
-              core.setOutput("result", "ERROR");
+              core.setOutput("status", "ERROR");
               core.setOutput("message", err.message);
             }
 
@@ -112,17 +112,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const result = "${{ needs.process.outputs.result }}";
+            const status = "${{ needs.process.outputs.status }}";
             const message = "${{ needs.process.outputs.message }}";
             const url = "${{ needs.process.outputs.repo_url }}";
 
-            console.log("DEBUG result:", result);
+            console.log("DEBUG status:", status);
             console.log("DEBUG message:", message);
             console.log("DEBUG url:", url);
 
             let body = "";
 
-            switch(result) {
+            switch(status) {
               case "SUCCESS":
                 body = `✅ ${message}\n\n🔗 ${url}`;
                 break;
@@ -143,7 +143,7 @@ jobs:
               body
             });
 
-            if (result === "SUCCESS" || result === "DUPLICATE") {
+            if (status === "SUCCESS" || status === "DUPLICATE") {
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
