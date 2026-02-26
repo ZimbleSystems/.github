@@ -94,6 +94,7 @@ jobs:
               });
 
               core.setOutput("result", "SUCCESS");
+              console.log("SETTING RESULT TO SUCCESS");
               core.setOutput("repo_url", repo.data.html_url);
               core.setOutput("message", "Repository created successfully.");
 
