@@ -150,7 +150,7 @@ jobs:
                 body = `✅ ${message}\n\n🔗 ${url}`;
                 break;
               case "DUPLICATE":
-                body = `❌ ${message}\n\n🔗 ${url}\n\nPlease reopen the issue, edit and correct it.`;
+                body = `❌ ${message}\n\n🔗 ${url}\n\nPlease reopen the issue, edit and correct it or open a fresh issue with corrected values.`;
                 break;
               case "PARSE_ERROR":
                 body = `❌ ${message}\n\nPlease edit the issue and correct it.`;
