@@ -61,6 +61,22 @@ jobs:
               const description = extract("Repository Description");
               const visibilityRaw = extract("Repository Visibility");
 
+              let visibility;
+
+              if (visibilityRaw.includes("Private")) {
+                visibility = "private";
+              } else if (visibilityRaw.includes("Public")) {
+                visibility = "public";
+              } else if (visibilityRaw.includes("Internal")) {
+                visibility = "internal";
+              } else {
+                core.setOutput("status", "PARSE_ERROR");
+                core.setOutput("message", "Invalid visibility option selected.");
+                return;
+              }
+
+              console.log("Selected visibility:", visibility);
+
               if (!product || !aspect || !name || !description || !visibilityRaw) {
                 core.setOutput("status", "PARSE_ERROR");
                 core.setOutput("message", "Missing required fields.");
@@ -122,7 +138,7 @@ jobs:
                 org: context.repo.owner,
                 name: finalName,
                 description,
-                visibility: visibilityRaw.includes("Private") ? "private" : "internal",
+                visibility,
                 auto_init: autoInit
               });
 

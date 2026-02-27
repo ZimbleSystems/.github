@@ -101,6 +101,7 @@ body:
       description: Select visibility level
       options:
         - Private
+        - Public
         - Internal (Enterprise only)
     validations:
       required: true
