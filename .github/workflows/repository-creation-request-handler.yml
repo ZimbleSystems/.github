@@ -144,9 +144,37 @@ jobs:
 
               console.log("Repository created:", repo.data.html_url);
 
+              // 🔹 Build Topics
+              function sanitizeTopic(value) {
+                return value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9-]/g, "-")
+                  .replace(/-+/g, "-")
+                  .replace(/^-|-$/g, "");
+              }
+
+              const topics = [
+                sanitizeTopic(product),
+                sanitizeTopic(aspect),
+                sanitizeTopic(name)
+              ];
+
+              if (tenant) {
+                topics.push(sanitizeTopic(tenant));
+              }
+
+              console.log("Applying topics:", topics);
+
+              // 🔹 Apply Topics
+              await github.rest.repos.replaceAllTopics({
+                owner: context.repo.owner,
+                repo: finalName,
+                names: topics
+              });
+
               core.setOutput("status", "SUCCESS");
               core.setOutput("repo_url", repo.data.html_url);
-              core.setOutput("message", "Repository created successfully.");
+              core.setOutput("message", "Repository created successfully with topics applied.");
 
             } catch (unhandledError) {
               console.error("Unhandled error:", unhandledError.message);
