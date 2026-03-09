@@ -1,9 +1,9 @@
-name: Invoke GitLab Mirror Provisioning
+name: Invoke GitLab Mirror Provisioning for ${{ github.event.repository.name }}
 
 on:
   workflow_dispatch:
 
 jobs:
   mirror:
-    uses: zimble-gh/.github/.github/workflows/provision-gitlab-mirror.yml@main
+    uses: ${{ github.repository_owner }}/.github/.github/workflows/provision-gitlab-mirror.yml@$default-branch
     secrets: inherit
