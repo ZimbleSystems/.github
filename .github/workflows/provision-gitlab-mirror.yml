@@ -1,9 +1,172 @@
+name: Provision GitLab mirror
+
 on:
-    workflow_call:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-    sync-to-gitlab:
-        runs-on: ubuntu-latest
-        steps:
-            - name: "Echo Sample Message"
-              run: echo "echo from ${{github.repository}}"
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update GitLab project + configure pull mirror
+        uses: actions/github-script@v7
+        env:
+          GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+          GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+          GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID }}
+          GITLAB_ORG_SUBGROUP: ${{ secrets.GITLAB_ORG_SUBGROUP }}
+          MIRROR_USERNAME: ${{ secrets.MIRROR_USERNAME }}
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        with:
+          script: |
+            const GITLAB_HOST        = process.env.GITLAB_HOST;
+            const GITLAB_API_TOKEN   = process.env.GITLAB_API_TOKEN;
+            const TOP_LEVEL_GROUP_ID = process.env.GITLAB_TOP_LEVEL_GROUP_ID;
+            const ORG_SUBGROUP       = process.env.GITLAB_ORG_SUBGROUP;
+            const MIRROR_USERNAME    = process.env.MIRROR_USERNAME;
+            const MIRROR_TOKEN       = process.env.MIRROR_TOKEN;
+
+            const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+
+            console.log("----- GitLab Mirror Provisioning Started -----");
+            console.log("Repo:", repoFullName);
+
+            // ─── 1. Read topics from the calling repo ──────────────────────────
+            const { data: topicData } = await github.rest.repos.getAllTopics({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            const topics = topicData.names;
+            console.log("Topics found:", topics);
+
+            function extractTopic(prefix) {
+              const match = topics.find(t => t.startsWith(`${prefix}-`));
+              return match ? match.slice(prefix.length + 1) : null;
+            }
+
+            const product = extractTopic("product");
+            const aspect  = extractTopic("aspect");
+            const name    = extractTopic("repo");
+            const tenant  = extractTopic("tenant");
+
+            if (!product || !aspect || !name) {
+              core.setFailed(
+                `Could not extract required topics. Found: ${topics.join(", ")}`
+              );
+              return;
+            }
+
+            console.log(`Product : ${product}`);
+            console.log(`Aspect  : ${aspect}`);
+            console.log(`Name    : ${name}`);
+            console.log(`Tenant  : ${tenant ?? "none"}`);
+
+            // ─── 2. GitLab API helpers ──────────────────────────────────────────
+            async function glFetch(method, path, body) {
+              const res = await fetch(`${GITLAB_HOST}/api/v4${path}`, {
+                method,
+                headers: {
+                  "PRIVATE-TOKEN": GITLAB_API_TOKEN,
+                  "Content-Type": "application/json"
+                },
+                ...(body ? { body: JSON.stringify(body) } : {})
+              });
+
+              const data = await res.json();
+
+              if (!res.ok) {
+                throw new Error(
+                  `GitLab API [${method} ${path}]: ${JSON.stringify(data)}`
+                );
+              }
+
+              return data;
+            }
+
+            async function findOrCreateGroup(parentId, groupPath, groupName) {
+              const res = await fetch(
+                `${GITLAB_HOST}/api/v4/groups/${parentId}/subgroups?search=${encodeURIComponent(groupPath)}&per_page=100`,
+                { headers: { "PRIVATE-TOKEN": GITLAB_API_TOKEN } }
+              );
+              const subgroups = await res.json();
+              const existing = subgroups.find(
+                g => g.path === groupPath || g.name === groupPath
+              );
+
+              if (existing) {
+                console.log(`  ✅ Found group  : ${existing.full_path} (id=${existing.id})`);
+                return existing;
+              }
+
+              console.log(`  ➕ Creating group: ${groupName} under parent ${parentId}`);
+              const created = await glFetch("POST", "/groups", {
+                name: groupName,
+                path: groupPath,
+                parent_id: parseInt(parentId),
+                visibility: "private"
+              });
+              console.log(`  ✅ Created group : ${created.full_path} (id=${created.id})`);
+              return created;
+            }
+
+            // ─── 3. Build nested group hierarchy ───────────────────────────────
+            //
+            // Without tenant:                  With tenant:
+            //   top-level-group                  top-level-group
+            //   └── ORG_SUBGROUP                 └── tenant
+            //       └── product                      └── product
+            //           └── aspect                       └── aspect
+            //               └── repo                         └── repo
+
+            console.log("\nResolving GitLab group hierarchy...");
+
+            const secondLevelPath = tenant ?? ORG_SUBGROUP;
+            const secondLevel     = await findOrCreateGroup(TOP_LEVEL_GROUP_ID, secondLevelPath, secondLevelPath);
+            const productGroup    = await findOrCreateGroup(secondLevel.id, product, product);
+            const aspectGroup     = await findOrCreateGroup(productGroup.id, aspect, aspect);
+
+            // ─── 4. Find or create the project ─────────────────────────────────
+            console.log(`\nLooking for project '${name}' in ${aspectGroup.full_path}...`);
+
+            const projectsRes = await fetch(
+              `${GITLAB_HOST}/api/v4/groups/${aspectGroup.id}/projects?search=${encodeURIComponent(name)}&per_page=100`,
+              { headers: { "PRIVATE-TOKEN": GITLAB_API_TOKEN } }
+            );
+            const projects = await projectsRes.json();
+            const existing = projects.find(p => p.path === name || p.name === name);
+
+            let projectId, projectUrl;
+
+            if (existing) {
+              projectId  = existing.id;
+              projectUrl = existing.web_url;
+              console.log(`Found existing project: ${projectUrl} (id=${projectId})`);
+            } else {
+              console.log(`Creating project '${name}'...`);
+              const created = await glFetch("POST", "/projects", {
+                name,
+                path: name,
+                namespace_id: aspectGroup.id,
+                visibility: "private"
+              });
+              projectId  = created.id;
+              projectUrl = created.web_url;
+              console.log(` Project created: ${projectUrl} (id=${projectId})`);
+            }
+
+            // ─── 5. Configure pull mirror ───────────────────────────────────────
+            const authCloneUrl = `https://${MIRROR_USERNAME}:${MIRROR_TOKEN}@github.com/${repoFullName}.git`;
+
+            console.log("\nConfiguring pull mirroring...");
+            await glFetch("PUT", `/projects/${projectId}/mirror/pull`, {
+              enabled: true,
+              url: authCloneUrl
+            });
+
+            console.log(" Pull mirroring enabled/updated.");
+            console.log(`\nGitLab project : ${projectUrl}`);
+            console.log(`Source repo    : https://github.com/${repoFullName}.git`);
