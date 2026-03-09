@@ -231,28 +231,28 @@ jobs:
               console.log(`✓ Project created : ${projectUrl} (id=${projectId})`);
             }
 
-            // ─────────────────────────────────────────────
-            // 5. Configure pull mirror
-            // ─────────────────────────────────────────────
-
-            const authCloneUrl =
-              `https://${MIRROR_USERNAME}:${MIRROR_TOKEN}@github.com/${repoFullName}.git`;
-
-            console.log("");
-            console.log("Configuring GitLab pull mirror...");
-            console.log("----------------------------------");
-
-            await glFetch("PUT", `/projects/${projectId}/mirror/pull`, {
-              enabled: true,
-              url: authCloneUrl
-            });
-
-            console.log("✓ Pull mirroring enabled / updated");
-            console.log("");
-
-            console.log("--------------------------------------------------");
-            console.log(`GitLab Project : ${projectUrl}`);
-            console.log(`GitHub Source  : https://github.com/${repoFullName}.git`);
-            console.log("--------------------------------------------------");
-
-            console.log("\nGitLab mirror provisioning completed successfully.");
+#            // ─────────────────────────────────────────────
+#            // 5. Configure pull mirror
+#            // ─────────────────────────────────────────────
+#
+#            const authCloneUrl =
+#              `https://${MIRROR_USERNAME}:${MIRROR_TOKEN}@github.com/${repoFullName}.git`;
+#
+#            console.log("");
+#            console.log("Configuring GitLab pull mirror...");
+#            console.log("----------------------------------");
+#
+#            await glFetch("PUT", `/projects/${projectId}/mirror/pull`, {
+#              enabled: true,
+#              url: authCloneUrl
+#            });
+#
+#            console.log("✓ Pull mirroring enabled / updated");
+#            console.log("");
+#
+#            console.log("--------------------------------------------------");
+#            console.log(`GitLab Project : ${projectUrl}`);
+#            console.log(`GitHub Source  : https://github.com/${repoFullName}.git`);
+#            console.log("--------------------------------------------------");
+#
+#            console.log("\nGitLab mirror provisioning completed successfully.");
