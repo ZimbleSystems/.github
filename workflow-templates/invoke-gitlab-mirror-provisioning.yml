@@ -5,5 +5,5 @@ on:
 
 jobs:
   mirror:
-    uses: zimble-gh/.github/.github/workflows/provision-gitlab-mirror.yml
+    uses: ZimbleSystems/.github/.github/workflows/provision-gitlab-mirror.yml
     secrets: inherit
