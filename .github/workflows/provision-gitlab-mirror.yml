@@ -12,7 +12,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Create or update GitLab project + configure pull mirror
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or update GitLab project
+        id: provision
         uses: actions/github-script@v7
 
         env:
@@ -20,19 +27,17 @@ jobs:
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
           GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID }}
           GITLAB_ORG_SUBGROUP: ${{ secrets.GITLAB_ORG_SUBGROUP }}
-          MIRROR_USERNAME: ${{ secrets.MIRROR_USERNAME }}
-          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
 
         with:
           script: |
+
             const GITLAB_HOST        = process.env.GITLAB_HOST;
             const GITLAB_API_TOKEN   = process.env.GITLAB_API_TOKEN;
             const TOP_LEVEL_GROUP_ID = process.env.GITLAB_TOP_LEVEL_GROUP_ID;
             const ORG_SUBGROUP       = process.env.GITLAB_ORG_SUBGROUP;
-            const MIRROR_USERNAME    = process.env.MIRROR_USERNAME;
-            const MIRROR_TOKEN       = process.env.MIRROR_TOKEN;
 
             const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+            // const repoVisibility = context.payload.repository.visibility;
 
             console.log("\n====================================================");
             console.log("      GitLab Mirror Provisioning Started");
@@ -190,6 +195,8 @@ jobs:
             // 4. Find or create GitLab project
             // ─────────────────────────────────────────────
 
+            // const visibility = repoVisibility === "public" ? "public" : "private";
+
             console.log("");
             console.log(`Searching for project '${name}'...`);
 
@@ -206,11 +213,13 @@ jobs:
 
             let projectId;
             let projectUrl;
+            let projectPath;
 
             if (existing) {
 
-              projectId  = existing.id;
-              projectUrl = existing.web_url;
+              projectId   = existing.id;
+              projectUrl  = existing.web_url;
+              projectPath = existing.path_with_namespace;
 
               console.log(`✓ Existing project found : ${projectUrl} (id=${projectId})`);
 
@@ -222,37 +231,56 @@ jobs:
                 name: name,
                 path: name,
                 namespace_id: aspectGroup.id,
+                // visibility: visibility
                 visibility: "private"
               });
 
-              projectId  = created.id;
-              projectUrl = created.web_url;
+              projectId   = created.id;
+              projectUrl  = created.web_url;
+              projectPath = created.path_with_namespace;
 
               console.log(`✓ Project created : ${projectUrl} (id=${projectId})`);
             }
 
-#            // ─────────────────────────────────────────────
-#            // 5. Configure pull mirror
-#            // ─────────────────────────────────────────────
-#
-#            const authCloneUrl =
-#              `https://${MIRROR_USERNAME}:${MIRROR_TOKEN}@github.com/${repoFullName}.git`;
-#
-#            console.log("");
-#            console.log("Configuring GitLab pull mirror...");
-#            console.log("----------------------------------");
-#
-#            await glFetch("PUT", `/projects/${projectId}/mirror/pull`, {
-#              enabled: true,
-#              url: authCloneUrl
-#            });
-#
-#            console.log("✓ Pull mirroring enabled / updated");
-#            console.log("");
-#
-#            console.log("--------------------------------------------------");
-#            console.log(`GitLab Project : ${projectUrl}`);
-#            console.log(`GitHub Source  : https://github.com/${repoFullName}.git`);
-#            console.log("--------------------------------------------------");
-#
-#            console.log("\nGitLab mirror provisioning completed successfully.");
+            console.log("");
+            console.log(`GitLab project path : ${projectPath}`);
+
+            core.setOutput("project_path", projectPath);
+
+      # ─────────────────────────────────────────────
+      # 5. Push mirror to GitLab
+      # ─────────────────────────────────────────────
+
+      - name: Mirror repository to GitLab
+        env:
+          GITLAB_HOST: ${{ secrets.GITLAB_HOST }}
+          GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+          PROJECT_PATH: ${{ steps.provision.outputs.project_path }}
+
+        run: |
+
+          echo ""
+          echo "--------------------------------------------------"
+          echo "Starting GitHub → GitLab mirror push"
+          echo "--------------------------------------------------"
+
+          GITLAB_URL="https://oauth2:${GITLAB_API_TOKEN}@${GITLAB_HOST#https://}/${PROJECT_PATH}.git"
+
+          echo "Adding GitLab remote..."
+          git remote add gitlab "$GITLAB_URL" || true
+
+          echo "Fetching all refs..."
+          git fetch --all --tags
+
+          echo "Pushing mirror to GitLab..."
+
+          for i in {1..5}; do
+            git push --mirror gitlab && break
+            echo "Retrying mirror push..."
+            sleep 5
+          done
+
+          echo ""
+          echo "--------------------------------------------------"
+          echo "GitHub → GitLab mirror completed"
+          echo "--------------------------------------------------"
