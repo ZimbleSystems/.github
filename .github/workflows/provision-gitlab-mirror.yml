@@ -279,7 +279,7 @@ jobs:
           echo "Pushing branches (force)..."
 
           for i in {1..5}; do
-            git push gitlab --all --force && git push gitlab --tags --force && break
+            git push gitlab * --force && git push gitlab --tags --force && break
             echo "Retrying mirror push..."
             sleep 5
           done
