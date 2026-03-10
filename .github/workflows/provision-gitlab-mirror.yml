@@ -266,21 +266,26 @@ jobs:
 
           GITLAB_URL="https://oauth2:${GITLAB_API_TOKEN}@${GITLAB_HOST#https://}/${PROJECT_PATH}.git"
 
-          echo "GITLAB_URL = " $GITLAB_URL
-
-          echo "Adding GitLab remote..."
           git remote add gitlab "$GITLAB_URL" || true
 
+          echo "Fetching branches..."
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
 
-          echo "Fetching all refs..."
-          git fetch --all --tags
+          echo "Fetching tags..."
+          git fetch --tags
 
-          echo "Pushing branches (force)..."
+          echo "Preparing local branches..."
+
+          for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/ | grep -v HEAD); do
+            local_branch=${branch#origin/}
+            git branch --force "$local_branch" "$branch"
+          done
+
+          echo "Running mirror push..."
 
           for i in {1..5}; do
-            git push gitlab * --force && git push gitlab --tags --force && break
-            echo "Retrying mirror push..."
+            git push --mirror gitlab && break
+            echo "Retrying mirror..."
             sleep 5
           done
 
