@@ -21,6 +21,8 @@ body:
         - common
         - ewallet
         - hyperconfigurator
+        - pos-management
+        - switching
     validations:
       required: true
 
@@ -93,7 +95,7 @@ body:
       label: Repository Options (Optional)
       description: Select additional repository options
       options:
-        - label: Initialize repository with README (auto_init)
+        - label: Initialize repository with README (Do NOT select in case you have already created the project locally with content)
 
   - type: dropdown
     id: visibility
