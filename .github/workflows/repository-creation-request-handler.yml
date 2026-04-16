@@ -54,7 +54,11 @@ jobs:
               const name = extract("Repository Name");
               let tenant = extract("Tenant Name \\(Optional\\)");
 
-              if (!tenant || tenant === "_No response_") {
+              if (
+                !tenant ||
+                tenant === "_No response_" ||
+                tenant === "None"
+              ) {
                 tenant = null;
               }
 

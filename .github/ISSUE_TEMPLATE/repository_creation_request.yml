@@ -51,12 +51,16 @@ body:
     validations:
       required: true
 
-  - type: input
+  - type: dropdown
     id: tenant_name
     attributes:
       label: Tenant Name (Optional)
-      description: Provide tenant/client name if this is tenant-specific
-      placeholder: tenant-alpha
+      description: Select tenant (choose "None" if not applicable)
+      options:
+        - 7-eleven
+        - mercadia
+        - petro
+        - telcel
     validations:
       required: false
 
