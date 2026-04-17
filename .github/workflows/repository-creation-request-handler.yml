@@ -22,11 +22,11 @@ jobs:
 
     steps:
       # 🔐 Generate GitHub App Token
-      - uses: actions/create-github-app-token@v3
+      - uses: tibdex/github-app-token@v2
         id: app-token
         with:
-          client-id: ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+          app_id: ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
+          private_key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
 
       # 🧠 All Logic In One Deterministic Step
       - name: Process Request
