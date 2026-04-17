@@ -75,7 +75,7 @@ jobs:
                 return;
               }
 
-              console.log("Selected visibility:", visibility);
+              console.log("Selected visibility: ", visibility);
 
               if (!product || !aspect || !name || !description || !visibilityRaw) {
                 core.setOutput("status", "PARSE_ERROR");
@@ -93,13 +93,40 @@ jobs:
                 ? `${product}-${aspect}-${name}-${tenant}`
                 : `${product}-${aspect}-${name}`;
 
-              if (finalName.length > 100) {
+              if (finalName.length > 100) { // repository name cannot be more than 100 characters
                 core.setOutput("status", "PARSE_ERROR");
-                core.setOutput("message", `Evaluated repository name is : ${finalName}\nRepository name cannot be more than 100 characters.`);
+                core.setOutput("message", `Evaluated repository name is:\n${finalName}\n\nRepository name cannot be more than 100 characters.`);
                 return;
               }
 
-              console.log("Checking duplicate for:", finalName);
+              // 🔹 Build Topics
+              function sanitizeTopic(value) {
+                return value
+                  .toLowerCase()
+                  .replace(/[^a-z0-9-]/g, "-")
+                  .replace(/-+/g, "-")
+                  .replace(/^-|-$/g, "");
+              }
+
+              // 🔹 Build Prefixed Topics
+              const topics = [
+                `product-${sanitizeTopic(product)}`,
+                `aspect-${sanitizeTopic(aspect)}`,
+                `repo-${sanitizeTopic(name)}`
+              ];
+
+              if (tenant) {
+                topics.push(`tenant-${sanitizeTopic(tenant)}`);
+              }
+              
+              const extraLengthyTopics = topics.filter((topic) => topic.length > 50); // repository topic cannot be more than 50 characters
+              if (extraLengthyTopics.length > 0) {
+                core.setOutput("status", "PARSE_ERROR");
+                core.setOutput("message", `Evaluated repository topics are:\n${extraLengthyTopics}\n\nAny topic attached to the repository cannot be more than 50 characters.`);
+                return;
+              }
+
+              console.log("Checking duplicate for: ", finalName);
 
               try {
                 const repo = await github.rest.repos.get({
@@ -150,34 +177,6 @@ jobs:
 
               console.log("Repository created:", repo.data.html_url);
 
-              // 🔹 Build Topics
-              function sanitizeTopic(value) {
-                return value
-                  .toLowerCase()
-                  .replace(/[^a-z0-9-]/g, "-")
-                  .replace(/-+/g, "-")
-                  .replace(/^-|-$/g, "");
-              }
-
-              // 🔹 Build Prefixed Topics
-              const topics = [
-                `product-${sanitizeTopic(product)}`,
-                `aspect-${sanitizeTopic(aspect)}`,
-                `repo-${sanitizeTopic(name)}`
-              ];
-
-              if (tenant) {
-                topics.push(`tenant-${sanitizeTopic(tenant)}`);
-              }
-              
-              const extraLengthyTopics = topics.filter((topic) => topic.length > 50);
-              if (extraLengthyTopics.length > 0) {
-                core.setOutput("status", "PARSE_ERROR");
-                core.setOutput("message", `Evaluated repository topics are : ${extraLengthyTopics}\nAny topic attached to the repository cannot be more than 50 characters.`);
-                return;
-              }
-
-
               console.log("Applying prefixed topics:", topics);
 
               // 🔹 Apply Topics
@@ -205,11 +204,15 @@ jobs:
     steps:
       - name: Comment & Close if needed
         uses: actions/github-script@v7
+        env:
+          STATUS: ${{ needs.process.outputs.status }}
+          MESSAGE: ${{ needs.process.outputs.message }}
+          URL: ${{ needs.process.outputs.repo_url }}
         with:
           script: |
-            const status = "${{ needs.process.outputs.status }}";
-            const message = "${{ needs.process.outputs.message }}";
-            const url = "${{ needs.process.outputs.repo_url }}";
+            const status = process.env.STATUS;
+            const message = process.env.MESSAGE;
+            const url = process.env.URL;
 
             console.log("DEBUG status:", status);
             console.log("DEBUG message:", message);
