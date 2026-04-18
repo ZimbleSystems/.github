@@ -52,11 +52,7 @@ jobs:
               const name    = extract("Repository Name");
               let   tenant  = extract("Tenant Name \\(Optional\\)");
 
-              if (
-                !tenant ||
-                tenant === "_No response_" ||
-                tenant === "None"
-              ) {
+              if (!tenant || tenant === "_No response_" || tenant === "None") {
                 tenant = null;
               }
 
@@ -101,7 +97,7 @@ jobs:
                 return;
               }
 
-              // 🔹 Build Topics
+              // 🔹 Topic Sanitizer
               function sanitizeTopic(value) {
                 return value
                   .toLowerCase()
@@ -110,11 +106,12 @@ jobs:
                   .replace(/^-|-$/g, "");
               }
 
-              // 🔹 Build Prefixed Topics
+              // 🔹 Build Topics
               const topics = [
                 `product-${sanitizeTopic(product)}`,
                 `aspect-${sanitizeTopic(aspect)}`,
-                `repo-${sanitizeTopic(name)}`
+                `repo-${sanitizeTopic(name)}`,
+                "managed-by-platform"
               ];
 
               if (tenant) {
