@@ -21,7 +21,7 @@ jobs:
           GITLAB_HOST: ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID || vars.GITLAB_TOP_LEVEL_GROUP_ID }}
-          GITLAB_ORG_SUBGROUP: ${{ secrets.GITLAB_ORG_SUBGROUP || vars.GITLAB_ORG_SUBGROUP }}
+          GITLAB_MY_ORG_SUBGROUP: ${{ secrets.GITLAB_MY_ORG_SUBGROUP || vars.GITLAB_MY_ORG_SUBGROUP }}
 
         with:
           script: |
@@ -32,7 +32,7 @@ jobs:
               "GITLAB_HOST"               : process.env.GITLAB_HOST,
               "GITLAB_API_TOKEN"          : process.env.GITLAB_API_TOKEN,
               "GITLAB_TOP_LEVEL_GROUP_ID" : process.env.GITLAB_TOP_LEVEL_GROUP_ID,
-              "GITLAB_ORG_SUBGROUP"       : process.env.GITLAB_ORG_SUBGROUP
+              "GITLAB_MY_ORG_SUBGROUP"    : process.env.GITLAB_MY_ORG_SUBGROUP
             };
 
             const missingVarsAndSecrets = Object.keys(requiredVarsAndSecrets).filter((key) => !requiredVarsAndSecrets[key]);
@@ -75,7 +75,7 @@ jobs:
           GITLAB_HOST: ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID || vars.GITLAB_TOP_LEVEL_GROUP_ID }}
-          GITLAB_ORG_SUBGROUP: ${{ secrets.GITLAB_ORG_SUBGROUP || vars.GITLAB_ORG_SUBGROUP }}
+          GITLAB_MY_ORG_SUBGROUP: ${{ secrets.GITLAB_MY_ORG_SUBGROUP || vars.GITLAB_MY_ORG_SUBGROUP }}
 
         with:
           script: |
@@ -83,7 +83,7 @@ jobs:
             const GITLAB_HOST               = process.env.GITLAB_HOST;
             const GITLAB_API_TOKEN          = process.env.GITLAB_API_TOKEN;
             const GITLAB_TOP_LEVEL_GROUP_ID = process.env.GITLAB_TOP_LEVEL_GROUP_ID;
-            const GITLAB_ORG_SUBGROUP       = process.env.GITLAB_ORG_SUBGROUP;
+            const GITLAB_MY_ORG_SUBGROUP    = process.env.GITLAB_MY_ORG_SUBGROUP;
 
             const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
             // const repoVisibility = context.payload.repository.visibility;
@@ -200,7 +200,7 @@ jobs:
             //
             // Without tenant:
             //   top-level-group
-            //   └── GITLAB_ORG_SUBGROUP
+            //   └── GITLAB_MY_ORG_SUBGROUP
             //       └── product
             //           └── aspect
             //               └── repo
@@ -217,7 +217,7 @@ jobs:
             console.log("Resolving GitLab group hierarchy...");
             console.log("------------------------------------");
 
-            const secondLevelPath = tenant ? `${GITLAB_ORG_SUBGROUP}-${tenant}` : GITLAB_ORG_SUBGROUP;
+            const secondLevelPath = tenant ? `${GITLAB_MY_ORG_SUBGROUP}-${tenant}` : GITLAB_MY_ORG_SUBGROUP;
 
             const secondLevel  = await findOrCreateGroup(
               GITLAB_TOP_LEVEL_GROUP_ID,
