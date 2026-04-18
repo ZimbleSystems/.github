@@ -16,8 +16,8 @@ jobs:
       startsWith(github.event.issue.title, '[REPO-CREATION-REQUEST]')
     runs-on: ubuntu-latest
     outputs:
-      status: ${{ steps.logic.outputs.status }}
-      message: ${{ steps.logic.outputs.message }}
+      status:   ${{ steps.logic.outputs.status }}
+      message:  ${{ steps.logic.outputs.message }}
       repo_url: ${{ steps.logic.outputs.repo_url }}
 
     steps:
@@ -25,7 +25,7 @@ jobs:
       - uses: tibdex/github-app-token@v2
         id: app-token
         with:
-          app_id: ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
+          app_id:      ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
           private_key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
 
       # 🧠 All Logic In One Deterministic Step
@@ -38,19 +38,19 @@ jobs:
             const body = context.payload.issue.body;
 
             console.log("----- Repository Provisioning Started -----");
-            console.log("Issue:", context.issue.number);
+            console.log("Issue : ", context.issue.number);
 
             function extract(label) {
-              const regex = new RegExp(`### ${label}\\s+([\\s\\S]*?)(?=\\n###|$)`);
-              const match = body.match(regex);
+              const regex  = new RegExp(`### ${label}\\s+([\\s\\S]*?)(?=\\n###|$)`);
+              const match  = body.match(regex);
               return match ? match[1].trim() : null;
             }
 
             try {
               const product = extract("Product Line");
-              const aspect = extract("Aspect / Domain");
-              const name = extract("Repository Name");
-              let tenant = extract("Tenant Name \\(Optional\\)");
+              const aspect  = extract("Aspect / Domain");
+              const name    = extract("Repository Name");
+              let   tenant  = extract("Tenant Name \\(Optional\\)");
 
               if (
                 !tenant ||
@@ -60,7 +60,7 @@ jobs:
                 tenant = null;
               }
 
-              const description = extract("Repository Description \\(Max\\. 350 characters\\)");
+              const description   = extract("Repository Description \\(Max\\. 350 characters\\)");
               const visibilityRaw = extract("Repository Visibility");
 
               let visibility;
@@ -97,7 +97,7 @@ jobs:
 
               if (finalName.length > 100) { // repository name cannot be more than 100 characters
                 core.setOutput("status", "PARSE_ERROR");
-                core.setOutput("message", `Evaluated repository name is:\n${finalName}\n\nRepository name cannot be more than 100 characters.`);
+                core.setOutput("message", `Evaluated repository name is :\n${finalName}\n\nRepository name cannot be more than 100 characters.`);
                 return;
               }
 
@@ -124,7 +124,7 @@ jobs:
               const extraLengthyTopics = topics.filter((topic) => topic.length > 50); // repository topic cannot be more than 50 characters
               if (extraLengthyTopics.length > 0) {
                 core.setOutput("status", "PARSE_ERROR");
-                core.setOutput("message", `Evaluated repository topics are:\n${extraLengthyTopics}\n\nAny topic attached to the repository cannot be more than 50 characters.`);
+                core.setOutput("message", `Evaluated repository topics are :\n${extraLengthyTopics}\n\nAny topic attached to the repository cannot be more than 50 characters.`);
                 return;
               }
 
@@ -132,8 +132,8 @@ jobs:
 
               try {
                 const repo = await github.rest.repos.get({
-                  owner: context.repo.owner,
-                  repo: finalName
+                  owner : context.repo.owner,
+                  repo  : finalName
                 });
 
                 core.setOutput("status", "DUPLICATE");
@@ -149,7 +149,7 @@ jobs:
                   console.error("Duplicate check failed:", duplicateCheckError.message);
 
                   core.setOutput("status", "ERROR");
-                  core.setOutput("message", `Duplicate verification failed: ${duplicateCheckError.message}`);
+                  core.setOutput("message", `Duplicate verification failed : ${duplicateCheckError.message}`);
                   return;
                 }
               }
@@ -170,11 +170,11 @@ jobs:
               console.log("Creating repository:", finalName);
 
               const repo = await github.rest.repos.createInOrg({
-                org: context.repo.owner,
-                name: finalName,
+                org         : context.repo.owner,
+                name        : finalName,
                 description : description.substring(0, 350), // description cannot be more than 350 characters
                 visibility,
-                auto_init: autoInit
+                auto_init   : autoInit
               });
 
               console.log("Repository created:", repo.data.html_url);
@@ -183,9 +183,9 @@ jobs:
 
               // 🔹 Apply Topics
               await github.rest.repos.replaceAllTopics({
-                owner: context.repo.owner,
-                repo: finalName,
-                names: topics
+                owner : context.repo.owner,
+                repo  : finalName,
+                names : topics
               });
 
               core.setOutput("status", "SUCCESS");
@@ -207,18 +207,18 @@ jobs:
       - name: Comment & Close if needed
         uses: actions/github-script@v9
         env:
-          STATUS: ${{ needs.process.outputs.status }}
+          STATUS:  ${{ needs.process.outputs.status }}
           MESSAGE: ${{ needs.process.outputs.message }}
-          URL: ${{ needs.process.outputs.repo_url }}
+          URL:     ${{ needs.process.outputs.repo_url }}
         with:
           script: |
-            const status = process.env.STATUS;
+            const status  = process.env.STATUS;
             const message = process.env.MESSAGE;
-            const url = process.env.URL;
+            const url     = process.env.URL;
 
-            console.log("DEBUG status:", status);
-            console.log("DEBUG message:", message);
-            console.log("DEBUG url:", url);
+            console.log("DEBUG status  : ", status);
+            console.log("DEBUG message : ", message);
+            console.log("DEBUG url     : ", url);
 
             let body = "";
 
@@ -237,17 +237,17 @@ jobs:
             }
 
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
+              owner        : context.repo.owner,
+              repo         : context.repo.repo,
+              issue_number : context.issue.number,
               body
             });
 
             if (status === "SUCCESS" || status === "DUPLICATE") {
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                state: "closed"
+                owner        : context.repo.owner,
+                repo         : context.repo.repo,
+                issue_number : context.issue.number,
+                state        : "closed"
               });
             }

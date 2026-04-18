@@ -38,10 +38,10 @@ jobs:
             const missingVarsAndSecrets = Object.keys(requiredVarsAndSecrets).filter((key) => !requiredVarsAndSecrets[key]);
 
             if (missingVarsAndSecrets.length > 0) {
-              const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
+              const repoFullName   = `${context.repo.owner}/${context.repo.repo}`;
               const repoVisibility = context.payload.repository.visibility;
-              const isPrivateRepo = repoVisibility === "private";
-              const errorMessage = "\nCould not detect below required variables and secrets.\n" + missingVarsAndSecrets.map((key) => "- " + key).join("\n");
+              const isPrivateRepo  = repoVisibility === "private";
+              const errorMessage   = "\nCould not detect below required variables and secrets.\n" + missingVarsAndSecrets.map((key) => "- " + key).join("\n");
               let troubleshootInstructions = [];
 
               if (!isPrivateRepo) {
@@ -102,8 +102,8 @@ jobs:
             console.log("Reading repository topics...");
 
             const { data: topicData } = await github.rest.repos.getAllTopics({
-              owner: context.repo.owner,
-              repo: context.repo.repo
+              owner : context.repo.owner,
+              repo  :  context.repo.repo
             });
 
             const topics = topicData.names;
@@ -145,10 +145,10 @@ jobs:
               const res = await fetch(`${GITLAB_HOST}/api/v4${path}`, {
                 method,
                 headers: {
-                  "PRIVATE-TOKEN": GITLAB_API_TOKEN,
-                  "Content-Type": "application/json"
+                  "PRIVATE-TOKEN" : GITLAB_API_TOKEN,
+                  "Content-Type"  : "application/json"
                 },
-                ...(body ? { body: JSON.stringify(body) } : {})
+                ...(body ? { body : JSON.stringify(body) } : {})
               });
 
               const data = await res.json();
@@ -183,10 +183,10 @@ jobs:
               console.log(`  → Creating group : ${groupName}`);
 
               const created = await glFetch("POST", "/groups", {
-                name: groupName,
-                path: groupPath,
-                parent_id: parseInt(parentId),
-                visibility: "private"
+                name       : groupName,
+                path       : groupPath,
+                parent_id  : parseInt(parentId),
+                visibility : "private"
               });
 
               console.log(`  ✓ Group created : ${created.full_path} (id=${created.id})`);
@@ -277,11 +277,11 @@ jobs:
               console.log(`Creating GitLab project '${name}'...`);
 
               const created = await glFetch("POST", "/projects", {
-                name: name,
-                path: name,
-                namespace_id: aspectGroup.id,
-                // visibility: visibility
-                visibility: "private"
+                name          : name,
+                path          : name,
+                namespace_id  : aspectGroup.id,
+                // visibility : visibility
+                visibility    : "private"
               });
 
               projectId   = created.id;
