@@ -118,9 +118,14 @@ jobs:
 
             if (tenant) topics.push(`tenant-${sanitize(tenant)}`);
 
-            if (topics.some(t => t.length > 50)) {
+            const longTopics = topics.filter(t => t.length > 50);
+
+            if (longTopics.length > 0) {
               core.setOutput("status", "PARSE_ERROR");
-              core.setOutput("message", "Topic length exceeded.");
+              core.setOutput(
+                "message",
+                `❌ Some generated repository topics are too long (>50 chars):\n\n${longTopics.join("\n")}\n\n👉 Please shorten inputs (product/aspect/name/tenant).`
+              );
               return;
             }
 
