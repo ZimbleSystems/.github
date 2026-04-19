@@ -51,6 +51,14 @@ jobs:
       
     steps:
 
+# TODO: try actions/create-github-app-token@v3 in place of tibdex/github-app-token@v2
+#? tibdex/github-app-token@v2 is archived and perhaps lacks maintenance
+#? tibdex/github-app-token@v2 is running on Node.js 20 for which github runner support will be removed on September 16th, 2026.
+#? tibdex/github-app-token@v2 action will be forced to run with Node.js 24 by default starting June 2nd, 2026.
+#? tibdex/github-app-token@v2 may encounter unknown issues with Node.js 24. Need to test this.
+#? actions/create-github-app-token@v3 requires app client-id but the token obtained expires too soon.
+#? actions/create-github-app-token@v3 has app-id parameter also that parameter may provide longer living tokens. Need to dive more and explore.
+#? app-id parameter with actions/create-github-app-token@v3 is deprecated. So need to find way to increase the token validity.
       - name: Generate GitHub App Token
         uses: tibdex/github-app-token@v2
         id: generate_app_token
@@ -454,6 +462,87 @@ jobs:
               core.setOutput("status", "ERROR");
               core.setOutput("error", msg);
             }
+
+# TODO: try the below pure github-scripts rather than using GitHub Cli as child_process. 
+#?     - name: Sync Secrets to Repository
+#?       id: sync_repository_secrets
+#?       continue-on-error: true
+#?       if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
+#?       uses: actions/github-script@v9
+#?       env:
+#?         REPO: ${{ steps.validate_request.outputs.final_name }}
+#?         GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
+#?         GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+#?       with:
+#?         github-token: ${{ steps.generate_app_token.outputs.token }}
+#?         script: |
+#?           const sodium = require('tweetsodium');
+#?    
+#?           const owner = context.repo.owner;
+#?           const repo  = process.env.REPO;
+#?    
+#?           async function setSecret(secretName, secretValue) {
+#?             if (!secretValue) return;
+#?    
+#?             // 1. Get public key
+#?             const { data: key } = await github.rest.actions.getRepoPublicKey({
+#?               owner,
+#?               repo
+#?             });
+#?    
+#?             // 2. Encrypt
+#?             const encryptedValue = sodium.seal(
+#?               Buffer.from(secretValue),
+#?               Buffer.from(key.key, 'base64')
+#?             );
+#?    
+#?             // 3. Upload secret
+#?             await github.rest.actions.createOrUpdateRepoSecret({
+#?               owner,
+#?               repo,
+#?               secret_name: secretName,
+#?               encrypted_value: encryptedValue.toString('base64'),
+#?               key_id: key.key_id
+#?             });
+#?           }
+#?    
+#?           let failures = [];
+#?           let successCount = 0;
+#?    
+#?           try {
+#?             await setSecret("GITLAB_API_TOKEN", process.env.GITLAB_API_TOKEN);
+#?             successCount++;
+#?    
+#?           } catch (e) {
+#?             failures.push(`GITLAB_API_TOKEN: ${e.message}`);
+#?           }
+#?    
+#?           try {
+#?             await setSecret("GH_APP_PRIVATE_KEY", process.env.GH_APP_PRIVATE_KEY);
+#?             successCount++;
+#?    
+#?           } catch (e) {
+#?             failures.push(`GH_APP_PRIVATE_KEY: ${e.message}`);
+#?           }
+#?    
+#?           if (failures.length === 0) {
+#?             core.setOutput("status", "OK");
+#?             core.setOutput("success", "✅ Secrets synced successfully.");
+#?           } else {
+#?             core.setOutput("status", "ERROR");
+#?             core.setOutput("error", `⚠️ Failed to sync some secrets:\n\n${failures.join("\n")}`);
+#?           }
+#? --------------------------------------------------------------------------------------------------
+#? tweetsodium may not be available inside the github node runner sandbox
+#? so need to try the below or else stick to gh cli as it provides out of the box secret encryption
+#?    - name: Setup Node
+#?      uses: actions/setup-node@v4
+#?    
+#?    - name: Install deps
+#?      run: npm install tweetsodium
+#?    
+#?    - name: Sync secrets
+#?      run: node scripts/sync-secrets.js
 
       - name: Sync Secrets to Repository
         id: sync_repository_secrets
