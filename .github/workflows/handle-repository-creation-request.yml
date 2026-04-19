@@ -9,7 +9,8 @@ permissions:
   issues: write
 
 jobs:
-  process:
+  provision_repository:
+    name: Provision Repository
     if: >
       github.event.issue.state == 'open' &&
       contains(github.event.issue.labels.*.name, 'repo-creation-request') &&
@@ -17,45 +18,43 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      validate_status:  ${{ steps.validate.outputs.status }}
-      validate_success: ${{ steps.validate.outputs.success }}
-      validate_error:   ${{ steps.validate.outputs.error }}
-      validate_warning: ${{ steps.validate.outputs.warning }}
-      validate_info:    ${{ steps.validate.outputs.info }}
+      validate_status:  ${{ steps.validate_request.outputs.status }}
+      validate_success: ${{ steps.validate_request.outputs.success }}
+      validate_error:   ${{ steps.validate_request.outputs.error }}
+      validate_warning: ${{ steps.validate_request.outputs.warning }}
+      validate_info:    ${{ steps.validate_request.outputs.info }}
 
-      duplicate_status: ${{ steps.duplicate.outputs.status }}
-      duplicate_error:  ${{ steps.duplicate.outputs.error }}
+      duplicate_status: ${{ steps.check_repository_existence.outputs.status }}
+      duplicate_error:  ${{ steps.check_repository_existence.outputs.error }}
 
-      create_status:   ${{ steps.create.outputs.status }}
-      create_success:  ${{ steps.create.outputs.success }}
-      create_error:    ${{ steps.create.outputs.error }}
+      create_status:   ${{ steps.create_repository.outputs.status }}
+      create_success:  ${{ steps.create_repository.outputs.success }}
+      create_error:    ${{ steps.create_repository.outputs.error }}
 
-      topics_status:   ${{ steps.topics.outputs.status }}
-      topics_success:  ${{ steps.topics.outputs.success }}
-      topics_error:    ${{ steps.topics.outputs.error }}
+      topics_status:   ${{ steps.apply_repository_topics.outputs.status }}
+      topics_success:  ${{ steps.apply_repository_topics.outputs.success }}
+      topics_error:    ${{ steps.apply_repository_topics.outputs.error }}
 
-      metadata_status:  ${{ steps.metadata.outputs.status }}
-      metadata_success: ${{ steps.metadata.outputs.success }}
-      metadata_error:   ${{ steps.metadata.outputs.error }}
+      metadata_status:  ${{ steps.set_repository_metadata.outputs.status }}
+      metadata_success: ${{ steps.set_repository_metadata.outputs.success }}
+      metadata_error:   ${{ steps.set_repository_metadata.outputs.error }}
 
-      orgvars_status:  ${{ steps.orgvars.outputs.status }}
-      orgvars_success: ${{ steps.orgvars.outputs.success }}
-      orgvars_error:   ${{ steps.orgvars.outputs.error }}
-      orgvars_info:    ${{ steps.orgvars.outputs.info }}
+      org_vars_status:  ${{ steps.copy_organization_variables.outputs.status }}
+      org_vars_success: ${{ steps.copy_organization_variables.outputs.success }}
+      org_vars_error:   ${{ steps.copy_organization_variables.outputs.error }}
+      org_vars_info:    ${{ steps.copy_organization_variables.outputs.info }}
 
     steps:
 
-      - uses: tibdex/github-app-token@v2
-        id: app-token
+      - name: Generate GitHub App Token
+        uses: tibdex/github-app-token@v2
+        id: generate_app_token
         with:
           app_id:      ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
           private_key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
 
-      # =========================
-      # VALIDATE
-      # =========================
-      - name: Validate Input
-        id: validate
+      - name: Validate Issue Input
+        id: validate_request
         uses: actions/github-script@v9
         with:
           script: |
@@ -198,17 +197,14 @@ jobs:
             core.setOutput("metadata", JSON.stringify(metadata));
             core.setOutput("description", descriptionRaw.substring(0, 350));
 
-      # =========================
-      # DUPLICATE CHECK
-      # =========================
-      - name: Check Duplicate
-        id: duplicate
-        if: steps.validate.outputs.status == 'OK'
+      - name: Check Repository Existence
+        id: check_repository_existence
+        if: steps.validate_request.outputs.status == 'OK'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME: ${{ steps.validate.outputs.final_name }}
+          FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             try {
               await github.rest.repos.get({
@@ -235,20 +231,17 @@ jobs:
               }
             }
 
-      # =========================
-      # CREATE REPO
-      # =========================
-      - name: Create Repo
-        id: create
-        if: steps.duplicate.outputs.status == 'OK'
+      - name: Create Repository
+        id: create_repository
+        if: steps.check_repository_existence.outputs.status == 'OK'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME:  ${{ steps.validate.outputs.final_name }}
-          DESCRIPTION: ${{ steps.validate.outputs.description }}
-          VISIBILITY:  ${{ steps.validate.outputs.visibility }}
-          AUTO_INIT:   ${{ steps.validate.outputs.auto_init }}
+          FINAL_NAME:  ${{ steps.validate_request.outputs.final_name }}
+          DESCRIPTION: ${{ steps.validate_request.outputs.description }}
+          VISIBILITY:  ${{ steps.validate_request.outputs.visibility }}
+          AUTO_INIT:   ${{ steps.validate_request.outputs.auto_init }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             try {
               const repo = await github.rest.repos.createInOrg({
@@ -275,19 +268,16 @@ jobs:
               core.setOutput("error", msg);
             }
 
-      # =========================
-      # TOPICS
-      # =========================
-      - name: Add Topics
-        id: topics
+      - name: Apply Repository Topics
+        id: apply_repository_topics
         continue-on-error: true
-        if: steps.create.outputs.status == 'OK'
+        if: steps.create_repository.outputs.status == 'OK'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME: ${{ steps.validate.outputs.final_name }}
-          TOPICS:     ${{ steps.validate.outputs.topics }}
+          FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
+          TOPICS:     ${{ steps.validate_request.outputs.topics }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             try {
               await github.rest.repos.replaceAllTopics({
@@ -314,19 +304,16 @@ jobs:
               core.setOutput("error", msg);
             }
 
-      # =========================
-      # METADATA VARIABLES
-      # =========================
-      - name: Add Metadata Variables
-        id: metadata
+      - name: Set Repository Metadata Variables
+        id: set_repository_metadata
         continue-on-error: true
-        if: steps.create.outputs.status == 'OK'
+        if: steps.create_repository.outputs.status == 'OK'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME: ${{ steps.validate.outputs.final_name }}
-          METADATA:   ${{ steps.validate.outputs.metadata }}
+          FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
+          METADATA:   ${{ steps.validate_request.outputs.metadata }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             const metadata = JSON.parse(process.env.METADATA);
             let failures = [];
@@ -366,18 +353,15 @@ jobs:
               core.setOutput("error", msg);
             }
 
-      # =========================
-      # ORG VARIABLES
-      # =========================
-      - name: Copy Org Variables
-        id: orgvars
+      - name: Copy Organization Variables to Repository
+        id: copy_organization_variables
         continue-on-error: true
-        if: steps.create.outputs.status == 'OK' && steps.validate.outputs.visibility == 'private'
+        if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME: ${{ steps.validate.outputs.final_name }}
+          FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             let failures = [];
             let skipped = [];
@@ -459,16 +443,17 @@ jobs:
               core.setOutput("error", msg);
             }
 
-  finalize:
-    needs: process
+  update_issue_status:
+    name: Update Issue Status
+    needs: provision_repository
     if: always()
     runs-on: ubuntu-latest
 
     steps:
-      - name: Comment & Close
+      - name: Comment on Issue and Update Status
         uses: actions/github-script@v9
         env:
-          DATA: ${{ toJson(needs.process.outputs) }}
+          DATA: ${{ toJson(needs.provision_repository.outputs) }}
         with:
           script: |
             const d = JSON.parse(process.env.DATA);
@@ -507,9 +492,9 @@ jobs:
 
             if (d.topics_status === "ERROR") warnings.push(d.topics_error);
             if (d.metadata_status === "ERROR") warnings.push(d.metadata_error);
-            if (d.orgvars_status === "ERROR") warnings.push(d.orgvars_error);
+            if (d.org_vars_status === "ERROR") warnings.push(d.org_vars_error);
 
-            if (d.orgvars_info) info.push(d.orgvars_info);
+            if (d.org_vars_info) info.push(d.org_vars_info);
 
             let body = "";
 
