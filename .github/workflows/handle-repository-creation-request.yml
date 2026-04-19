@@ -178,6 +178,7 @@ jobs:
             };
 
             if (errors.length > 0) {
+              errors.push("To create a new repo please edit this issue and add correct inputs and try again\nOr\nclose this and open a new issue with correct inputs.")
               core.setOutput("status", "PARSE_ERROR");
               core.setOutput("error", errors.join("\n\n"));
               core.setOutput("warning", JSON.stringify(warnings));
@@ -207,13 +208,18 @@ jobs:
           github-token: ${{ steps.generate_app_token.outputs.token }}
           script: |
             try {
-              await github.rest.repos.get({
+              const repo = await github.rest.repos.get({
                 owner: context.repo.owner,
                 repo: process.env.FINAL_NAME
               });
 
+              const msg = `❌ Repository already exists.
+            You can visit the existing repo for more clarity.
+            🔗 ${repo.data.html_url}
+            To create a new repo please reopen and edit this issue and try again or create a new issue with appropriate inputs.
+            `;
               core.setOutput("status", "DUPLICATE_ERROR");
-
+              core.setOutput("error", msg);
             } catch (e) {
               if (e.status === 404) {
                 core.setOutput("status", "OK");
@@ -253,7 +259,7 @@ jobs:
               });
 
               core.setOutput("status", "OK");
-              core.setOutput("success", `✅ Repository created successfully.\n${repo.data.html_url}`);
+              core.setOutput("success", `✅ Repository created successfully.\n\n🔗 ${repo.data.html_url}`);
 
             } catch (e) {
               const msg = `❌ Failed to create repo.
@@ -478,9 +484,7 @@ jobs:
               warnings.push(...safeParse(d.validate_warning));
             }
 
-            if (d.duplicate_status === "DUPLICATE_ERROR") {
-              errors.push("❌ Repository already exists.\n\nPlease edit and retry.");
-            } else if (d.duplicate_status === "ERROR") {
+            if (d.duplicate_status === "DUPLICATE_ERROR" || d.duplicate_status === "ERROR") {
               errors.push(d.duplicate_error);
             }
 
@@ -498,20 +502,20 @@ jobs:
 
             let body = "";
 
-            if (errors.length > 0) {
-              body += `❌ Errors:\n\n${errors.join("\n\n")}`;
+            if (success.length > 0) {
+              body += `✅ Success:\n---------\n\n${success.join("\n\n")}`;
             }
 
-            if (success.length > 0) {
-              body += `\n\n✅ Success:\n\n${success.join("\n\n")}`;
+            if (errors.length > 0) {
+              body += `\n\n❌ Errors:\n---------\n\n${errors.join("\n\n")}`;
             }
 
             if (warnings.length > 0) {
-              body += `\n\n⚠️ Warnings:\n\n${warnings.join("\n\n")}`;
+              body += `\n\n⚠️ Warnings:\n---------\n\n${warnings.join("\n\n")}`;
             }
 
             if (info.length > 0) {
-              body += `\n\nℹ️ Info:\n\n${info.join("\n\n")}`;
+              body += `\n\nℹ️ Info:\n---------\n\n${info.join("\n\n")}`;
             }
 
             await github.rest.issues.createComment({
