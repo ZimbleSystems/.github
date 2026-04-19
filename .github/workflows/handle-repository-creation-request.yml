@@ -79,6 +79,10 @@ jobs:
             const repoOptions    = extract("Repository Options \\(Optional\\)");
             let tenant           = extract("Tenant Name \\(Optional\\)");
 
+            if (projectType && projectType.startsWith("---")) {
+              errors.push("Invalid Project Type selected. Please choose a valid option.");
+            }
+
             if (!tenant || tenant === "_No response_" || tenant === "None") {
               tenant = null;
             }
@@ -90,23 +94,21 @@ jobs:
             if (!descriptionRaw) errors.push("Missing: Repository Description");
 
             if (name && !/^[a-z0-9-]+$/.test(name)) {
-              errors.push("Repository name must be kebab-case.");
+              errors.push("Repository name must be kebab-case (lowercase, numbers, hyphens only).");
             }
 
             let visibility;
-
             if (visibilityRaw?.includes("Private")) visibility = "private";
             else if (visibilityRaw?.includes("Public")) visibility = "public";
             else if (visibilityRaw?.includes("Internal")) visibility = "internal";
-            else errors.push("Invalid visibility option.");
+            else errors.push("Invalid visibility option selected.");
 
             let autoInit = false;
-
             if (repoOptions) {
               if (repoOptions.includes("- [x] Initialize repository with README")) {
                 autoInit = true;
               } else if (repoOptions !== "_No response_") {
-                errors.push("Invalid repository option.");
+                errors.push("Invalid repository options selection.");
               }
             }
 
@@ -118,7 +120,18 @@ jobs:
                 : `${product}-${aspect}-${name}`;
 
               if (finalName.length > 100) {
-                errors.push(`Repo name too long (${finalName.length}/100):\n${finalName}`);
+                errors.push(
+            `❌ Repository name exceeds allowed length.
+
+            Allowed max length: 100 characters  
+            Computed final repository name:
+            ${finalName}
+
+            Computed length: ${finalName.length}
+
+            👉 Naming format:
+            <product>-<aspect>-<name>[-<tenant>]`
+                );
               }
             }
 
@@ -140,13 +153,20 @@ jobs:
               if (tenant) topics.push(`tenant-${sanitize(tenant)}`);
 
               const longTopics = topics.filter(t => t.length > 50);
+
               if (longTopics.length > 0) {
-                errors.push(`Topics exceed 50 chars:\n${longTopics.join("\n")}`);
+                errors.push(
+            `❌ Some repository topics exceed 50 characters:
+
+            ${longTopics.join("\n")}
+
+            👉 Please shorten input values.`
+                );
               }
             }
 
             if (descriptionRaw && descriptionRaw.length > 350) {
-              warnings.push("Description will be truncated.");
+              warnings.push("Description exceeds 350 characters and will be truncated.");
             }
 
             const metadata = {
@@ -179,7 +199,7 @@ jobs:
             core.setOutput("description", descriptionRaw.substring(0, 350));
 
       # =========================
-      # DUPLICATE
+      # DUPLICATE CHECK
       # =========================
       - name: Check Duplicate
         id: duplicate
@@ -202,13 +222,21 @@ jobs:
               if (e.status === 404) {
                 core.setOutput("status", "OK");
               } else {
+                const msg = `❌ Failed to verify if repository already exists.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Error: ${e.message}
+
+            👉 Please edit this issue and retry or close this and create a new issue or contact platform team if issue persists.
+            `;
                 core.setOutput("status", "ERROR");
-                core.setOutput("error", e.message);
+                core.setOutput("error", msg);
               }
             }
 
       # =========================
-      # CREATE
+      # CREATE REPO
       # =========================
       - name: Create Repo
         id: create
@@ -232,11 +260,19 @@ jobs:
               });
 
               core.setOutput("status", "OK");
-              core.setOutput("success", `✅ Repo created:\n${repo.data.html_url}`);
+              core.setOutput("success", `✅ Repository created successfully.\n${repo.data.html_url}`);
 
             } catch (e) {
+              const msg = `❌ Failed to create repo.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Error: ${e.message}
+
+            👉 Please edit this issue and retry or close this and create a new issue or contact platform team if issue persists.
+            `;
               core.setOutput("status", "ERROR");
-              core.setOutput("error", e.message);
+              core.setOutput("error", msg);
             }
 
       # =========================
@@ -261,15 +297,25 @@ jobs:
               });
 
               core.setOutput("status", "OK");
-              core.setOutput("success", "Topics applied.");
+              core.setOutput("success", "Topics applied successfully.");
 
             } catch (e) {
+              const msg = `⚠️ Failed to apply repository topics.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Topics:
+            ${process.env.TOPICS}
+
+            Error:
+            ${e.message}
+            `;
               core.setOutput("status", "ERROR");
-              core.setOutput("error", e.message);
+              core.setOutput("error", msg);
             }
 
       # =========================
-      # METADATA
+      # METADATA VARIABLES
       # =========================
       - name: Add Metadata Variables
         id: metadata
@@ -284,31 +330,44 @@ jobs:
           script: |
             const metadata = JSON.parse(process.env.METADATA);
             let failures = [];
+            let successCount = 0;
 
-            for (const [k, v] of Object.entries(metadata)) {
-              if (v == null) continue;
+            for (const [key, value] of Object.entries(metadata)) {
+              if (value === null || value === undefined) continue;
+
               try {
                 await github.rest.actions.createRepoVariable({
                   owner: context.repo.owner,
                   repo: process.env.FINAL_NAME,
-                  name: k,
-                  value: String(v)
+                  name: key,
+                  value: String(value)
                 });
+                successCount++;
               } catch (e) {
-                failures.push(`${k}: ${e.message}`);
+                failures.push(`Variable: ${key}\nError: ${e.message}`);
               }
             }
 
             if (failures.length === 0) {
               core.setOutput("status", "OK");
-              core.setOutput("success", "Metadata variables set.");
+              core.setOutput("success", "Metadata variables applied successfully.");
             } else {
+              const msg = `⚠️ Some repository metadata variables failed to be created.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Successful: ${successCount}
+            Failed: ${failures.length}
+
+            Failure details:
+            ${failures.join("\n\n")}
+            `;
               core.setOutput("status", "ERROR");
-              core.setOutput("error", failures.join("\n"));
+              core.setOutput("error", msg);
             }
 
       # =========================
-      # ORG VARS
+      # ORG VARIABLES
       # =========================
       - name: Copy Org Variables
         id: orgvars
@@ -322,13 +381,35 @@ jobs:
           script: |
             let failures = [];
             let skipped = [];
+            let successCount = 0;
+            let total = 0;
 
-            const vars = await github.paginate(
-              github.rest.actions.listOrgVariables,
-              { org: context.repo.owner }
-            );
+            let allVars;
 
-            for (const v of vars) {
+            try {
+              allVars = await github.paginate(
+                github.rest.actions.listOrgVariables,
+                { org: context.repo.owner }
+              );
+            } catch (e) {
+              const msg = `⚠️ Failed to fetch organization variables.
+
+            Error: ${e.message}
+            `;
+              core.setOutput("status", "ERROR");
+              core.setOutput("error", msg);
+              return;
+            }
+
+            if (!allVars || allVars.length === 0) {
+              core.setOutput("status", "OK");
+              core.setOutput("info", JSON.stringify(["No organization variables found."]));
+              return;
+            }
+
+            for (const v of allVars) {
+              total++;
+
               if (v.visibility === "selected") {
                 skipped.push(v.name);
                 continue;
@@ -341,24 +422,43 @@ jobs:
                   name: v.name,
                   value: v.value
                 });
+                successCount++;
               } catch (e) {
-                failures.push(`${v.name}: ${e.message}`);
+                failures.push(`Variable: ${v.name}\nError: ${e.message}`);
               }
             }
 
-            core.setOutput("info", JSON.stringify(skipped));
+            let infoMsg = "";
+
+            if (skipped.length > 0) {
+              infoMsg = `ℹ️ Skipped organization variables with restricted visibility ("selected"):
+
+            ${skipped.join("\n")}
+            `;
+            }
+
+            core.setOutput("info", infoMsg);
 
             if (failures.length === 0) {
               core.setOutput("status", "OK");
-              core.setOutput("success", "Org variables copied.");
+              core.setOutput("success", "Organization variables copied successfully.");
             } else {
+              const msg = `⚠️ Some organization variables failed to copy.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Total Variables: ${total}
+            Successfully Copied: ${successCount}
+            Skipped (restricted): ${skipped.length}
+            Failed: ${failures.length}
+
+            Failure details:
+            ${failures.join("\n\n")}
+            `;
               core.setOutput("status", "ERROR");
-              core.setOutput("error", failures.join("\n"));
+              core.setOutput("error", msg);
             }
 
-  # =========================
-  # FINALIZE
-  # =========================
   finalize:
     needs: process
     if: always()
@@ -373,29 +473,61 @@ jobs:
           script: |
             const d = JSON.parse(process.env.DATA);
 
-            let sections = [];
+            let success = [];
+            let warnings = [];
+            let info = [];
+            let errors = [];
 
-            function add(title, msg) {
-              if (msg) sections.push(`### ${title}\n${msg}`);
-            }
-
-            if (d.validate_error) add("❌ Validation", d.validate_error);
-            if (d.duplicate_error) add("❌ Duplicate Check", d.duplicate_error);
-            if (d.create_error) add("❌ Creation", d.create_error);
-
-            if (d.create_success) add("✅ Creation", d.create_success);
-            if (d.topics_error) add("⚠️ Topics", d.topics_error);
-            if (d.metadata_error) add("⚠️ Metadata", d.metadata_error);
-            if (d.orgvars_error) add("⚠️ Org Vars", d.orgvars_error);
-
-            if (d.orgvars_info) {
-              const skipped = JSON.parse(d.orgvars_info || "[]");
-              if (skipped.length > 0) {
-                add("ℹ️ Skipped Org Vars", skipped.join("\n"));
+            function safeParse(val) {
+              try {
+                return JSON.parse(val || "[]");
+              } catch {
+                return [];
               }
             }
 
-            const body = sections.join("\n\n");
+            if (d.validate_status === "PARSE_ERROR") {
+              errors.push(d.validate_error);
+            } else {
+              if (d.validate_success) success.push(d.validate_success);
+              warnings.push(...safeParse(d.validate_warning));
+            }
+
+            if (d.duplicate_status === "DUPLICATE_ERROR") {
+              errors.push("❌ Repository already exists.\n\nPlease edit and retry.");
+            } else if (d.duplicate_status === "ERROR") {
+              errors.push(d.duplicate_error);
+            }
+
+            if (d.create_status === "ERROR") {
+              errors.push(d.create_error);
+            } else if (d.create_status === "OK") {
+              success.push(d.create_success);
+            }
+
+            if (d.topics_status === "ERROR") warnings.push(d.topics_error);
+            if (d.metadata_status === "ERROR") warnings.push(d.metadata_error);
+            if (d.orgvars_status === "ERROR") warnings.push(d.orgvars_error);
+
+            if (d.orgvars_info) info.push(d.orgvars_info);
+
+            let body = "";
+
+            if (errors.length > 0) {
+              body += `❌ Errors:\n\n${errors.join("\n\n")}`;
+            }
+
+            if (success.length > 0) {
+              body += `\n\n✅ Success:\n\n${success.join("\n\n")}`;
+            }
+
+            if (warnings.length > 0) {
+              body += `\n\n⚠️ Warnings:\n\n${warnings.join("\n\n")}`;
+            }
+
+            if (info.length > 0) {
+              body += `\n\nℹ️ Info:\n\n${info.join("\n\n")}`;
+            }
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
