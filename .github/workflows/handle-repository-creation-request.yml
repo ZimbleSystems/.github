@@ -65,6 +65,7 @@ jobs:
         with:
           app-id:      ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+          owner:       ${{ github.repository_owner }}
 
       - name: Validate Issue Input
         id: validate_request
