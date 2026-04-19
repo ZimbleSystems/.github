@@ -27,6 +27,7 @@ jobs:
       metadata_message:  ${{ steps.metadata.outputs.message }}
       orgvars_status:    ${{ steps.orgvars.outputs.status }}
       orgvars_message:   ${{ steps.orgvars.outputs.message }}
+      orgvars_info:      ${{ steps.orgvars.outputs.info }}
 
       message:   ${{ steps.create.outputs.message || steps.validate.outputs.message }}
       repo_url:  ${{ steps.create.outputs.repo_url }}
@@ -412,6 +413,7 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             let failures = [];
+            let skipped  = [];
             let successCount = 0;
             let total = 0;
 
@@ -426,11 +428,18 @@ jobs:
 
               if (!allVars || allVars.length === 0) {
                 core.setOutput("status", "OK");
+                core.setOutput("info", "No organization variables found.");
                 return;
               }
 
               for (const v of allVars) {
                 total++;
+
+                // 🔥 SKIP SELECTED VISIBILITY
+                if (v.visibility === "selected") {
+                  skipped.push(v.name);
+                  continue;
+                }
 
                 try {
                   await github.rest.actions.createRepoVariable({
@@ -450,7 +459,6 @@ jobs:
               }
 
             } catch (e) {
-              // Failure to fetch org vars itself
               core.setOutput("status", "ERROR");
               core.setOutput(
                 "message",
@@ -462,7 +470,20 @@ jobs:
             }
 
             // =========================
-            // Final decision
+            // Build INFO message
+            // =========================
+            let infoMsg = "";
+
+            if (skipped.length > 0) {
+              infoMsg = `ℹ️ Skipped organization variables with restricted visibility ("selected"):
+
+            ${skipped.join("\n")}`;
+            }
+
+            core.setOutput("info", infoMsg);
+
+            // =========================
+            // Final status
             // =========================
             if (failures.length === 0) {
               core.setOutput("status", "OK");
@@ -475,6 +496,7 @@ jobs:
 
             Total Variables: ${total}
             Successfully Copied: ${successCount}
+            Skipped (restricted): ${skipped.length}
             Failed: ${failures.length}
 
             Failure details:
@@ -506,6 +528,7 @@ jobs:
           METADATA_MESSAGE:  ${{ needs.process.outputs.metadata_message }}
           ORGVARS_STATUS:    ${{ needs.process.outputs.orgvars_status }}
           ORGVARS_MESSAGE:   ${{ needs.process.outputs.orgvars_message }}
+          ORGVARS_INFO:      ${{ needs.process.outputs.orgvars_info }}
           MESSAGE:           ${{ needs.process.outputs.message }}
           URL:               ${{ needs.process.outputs.repo_url }}
           WARNINGS:          ${{ needs.process.outputs.warnings }}
@@ -513,6 +536,7 @@ jobs:
           script: |
             const s = process.env;
             const warnings = JSON.parse(s.WARNINGS || "[]");
+            let info = [];
 
             let body = "";
 
@@ -538,10 +562,24 @@ jobs:
                 warnings.push(`⚠️ Organization variables copy failed:\n${s.ORGVARS_MESSAGE}`);
               }
 
+              if (s.ORGVARS_INFO) {
+                info.push(s.ORGVARS_INFO);
+              }
+
               if (warnings.length === 0) {
                 body = `✅ Repository created successfully\n\n🔗 ${s.URL}`;
               } else {
-                body = `⚠️ Repository created with warnings:\n\n${warnings.join("\n")}\n\n🔗 ${s.URL}`;
+                body = `⚠️ Repository created with additional details:\n\n`;
+
+                if (warnings.length > 0) {
+                  body += `⚠️ Warnings:\n${warnings.join("\n\n")}\n\n`;
+                }
+
+                if (info.length > 0) {
+                  body += `ℹ️ Info:\n${info.join("\n\n")}\n\n`;
+                }
+
+                body += `🔗 ${s.URL}`;
               }
             }
 
