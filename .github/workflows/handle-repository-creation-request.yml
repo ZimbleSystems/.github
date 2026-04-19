@@ -17,12 +17,13 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      validate_status:  ${{ steps.validate.outputs.status }}
-      duplicate_status: ${{ steps.duplicate.outputs.status }}
-      create_status:    ${{ steps.create.outputs.status }}
-      topics_status:    ${{ steps.topics.outputs.status }}
-      metadata_status:  ${{ steps.metadata.outputs.status }}
-      orgvars_status:   ${{ steps.orgvars.outputs.status }}
+      validate_status:   ${{ steps.validate.outputs.status }}
+      duplicate_status:  ${{ steps.duplicate.outputs.status }}
+      duplicate_message: ${{ steps.duplicate.outputs.message }}
+      create_status:     ${{ steps.create.outputs.status }}
+      topics_status:     ${{ steps.topics.outputs.status }}
+      metadata_status:   ${{ steps.metadata.outputs.status }}
+      orgvars_status:    ${{ steps.orgvars.outputs.status }}
 
       message:   ${{ steps.create.outputs.message || steps.validate.outputs.message }}
       repo_url:  ${{ steps.create.outputs.repo_url }}
@@ -237,13 +238,27 @@ jobs:
                 owner: context.repo.owner,
                 repo: process.env.FINAL_NAME
               });
+
               core.setOutput("status", "DUPLICATE_ERROR");
+
             } catch (e) {
-              if (e.status === 404) core.setOutput("status", "OK");
-              else {
-                core.setOutput("status", "ERROR");
-                core.setOutput("message", e.message);
+
+              if (e.status === 404) {
+                core.setOutput("status", "OK");
+                return;
               }
+
+              // 🔥 REAL ERROR PROPAGATION
+              const msg = `❌ Failed to verify if repository already exists.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Error: ${e.message}
+
+            👉 Please retry or contact platform team if issue persists.`;
+
+              core.setOutput("status", "ERROR");
+              core.setOutput("message", msg);
             }
 
       # =========================
@@ -383,15 +398,16 @@ jobs:
       - name: Comment & Close
         uses: actions/github-script@v9
         env:
-          VALIDATE_STATUS:  ${{ needs.process.outputs.validate_status }}
-          DUPLICATE_STATUS: ${{ needs.process.outputs.duplicate_status }}
-          CREATE_STATUS:    ${{ needs.process.outputs.create_status }}
-          TOPICS_STATUS:    ${{ needs.process.outputs.topics_status }}
-          METADATA_STATUS:  ${{ needs.process.outputs.metadata_status }}
-          ORGVARS_STATUS:   ${{ needs.process.outputs.orgvars_status }}
-          MESSAGE:          ${{ needs.process.outputs.message }}
-          URL:              ${{ needs.process.outputs.repo_url }}
-          WARNINGS:         ${{ needs.process.outputs.warnings }}
+          VALIDATE_STATUS:   ${{ needs.process.outputs.validate_status }}
+          DUPLICATE_STATUS:  ${{ needs.process.outputs.duplicate_status }}
+          DUPLICATE_MESSAGE: ${{ needs.process.outputs.duplicate_message }}
+          CREATE_STATUS:     ${{ needs.process.outputs.create_status }}
+          TOPICS_STATUS:     ${{ needs.process.outputs.topics_status }}
+          METADATA_STATUS:   ${{ needs.process.outputs.metadata_status }}
+          ORGVARS_STATUS:    ${{ needs.process.outputs.orgvars_status }}
+          MESSAGE:           ${{ needs.process.outputs.message }}
+          URL:               ${{ needs.process.outputs.repo_url }}
+          WARNINGS:          ${{ needs.process.outputs.warnings }}
         with:
           script: |
             const s = process.env;
@@ -403,6 +419,8 @@ jobs:
               body = `❌ ${s.MESSAGE}`;
             } else if (s.DUPLICATE_STATUS === "DUPLICATE_ERROR") {
               body = `❌ Repository already exists.\n\nPlease edit and retry.`;
+            } else if (s.DUPLICATE_STATUS === "ERROR") {
+              body = s.DUPLICATE_MESSAGE || "❌ Duplicate check failed.";
             } else if (s.CREATE_STATUS === "ERROR") {
               body = `❌ Repo creation failed: ${s.MESSAGE}`;
             } else if (s.CREATE_STATUS === "OK") {
