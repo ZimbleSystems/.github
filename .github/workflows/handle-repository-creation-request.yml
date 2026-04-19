@@ -26,6 +26,7 @@ jobs:
       metadata_status:   ${{ steps.metadata.outputs.status }}
       metadata_message:  ${{ steps.metadata.outputs.message }}
       orgvars_status:    ${{ steps.orgvars.outputs.status }}
+      orgvars_message:   ${{ steps.orgvars.outputs.message }}
 
       message:   ${{ steps.create.outputs.message || steps.validate.outputs.message }}
       repo_url:  ${{ steps.create.outputs.repo_url }}
@@ -410,26 +411,78 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            try {
-              const res = await github.rest.actions.listOrgVariables({
-                org: context.repo.owner
-              });
+            let failures = [];
+            let successCount = 0;
+            let total = 0;
 
-              for (const v of res.data.variables) {
-                await github.rest.actions.createRepoVariable({
-                  owner: context.repo.owner,
-                  repo: process.env.FINAL_NAME,
-                  name: v.name,
-                  value: v.value
-                });
+            try {
+              const allVars = await github.paginate(
+                github.rest.actions.listOrgVariables,
+                {
+                  org: context.repo.owner,
+                  per_page: 100
+                }
+              );
+
+              if (!allVars || allVars.length === 0) {
+                core.setOutput("status", "OK");
+                return;
               }
 
-              core.setOutput("status", "OK");
+              for (const v of allVars) {
+                total++;
+
+                try {
+                  await github.rest.actions.createRepoVariable({
+                    owner: context.repo.owner,
+                    repo: process.env.FINAL_NAME,
+                    name: v.name,
+                    value: v.value
+                  });
+
+                  successCount++;
+
+                } catch (e) {
+                  failures.push(
+                    `Variable: ${v.name}\nError: ${e.message}`
+                  );
+                }
+              }
 
             } catch (e) {
+              // Failure to fetch org vars itself
               core.setOutput("status", "ERROR");
-              core.setOutput("message", e.message);
+              core.setOutput(
+                "message",
+                `❌ Failed to fetch organization variables.
+
+            Error: ${e.message}`
+              );
+              return;
             }
+
+            // =========================
+            // Final decision
+            // =========================
+            if (failures.length === 0) {
+              core.setOutput("status", "OK");
+              return;
+            }
+
+            const msg = `Some organization variables failed to copy.
+
+            Repository: ${process.env.FINAL_NAME}
+
+            Total Variables: ${total}
+            Successfully Copied: ${successCount}
+            Failed: ${failures.length}
+
+            Failure details:
+            ${failures.join("\n\n")}
+            `;
+
+            core.setOutput("status", "ERROR");
+            core.setOutput("message", msg);
 
   # =========================
   # FINALIZE
@@ -452,6 +505,7 @@ jobs:
           METADATA_STATUS:   ${{ needs.process.outputs.metadata_status }}
           METADATA_MESSAGE:  ${{ needs.process.outputs.metadata_message }}
           ORGVARS_STATUS:    ${{ needs.process.outputs.orgvars_status }}
+          ORGVARS_MESSAGE:   ${{ needs.process.outputs.orgvars_message }}
           MESSAGE:           ${{ needs.process.outputs.message }}
           URL:               ${{ needs.process.outputs.repo_url }}
           WARNINGS:          ${{ needs.process.outputs.warnings }}
@@ -480,8 +534,9 @@ jobs:
                 warnings.push(`⚠️ Metadata variables step failed:\n${s.METADATA_MESSAGE}`);
               }
 
-              if (s.ORGVARS_STATUS === "ERROR")
-                warnings.push("Failed to copy org variables");
+              if (s.ORGVARS_STATUS === "ERROR") {
+                warnings.push(`⚠️ Organization variables copy failed:\n${s.ORGVARS_MESSAGE}`);
+              }
 
               if (warnings.length === 0) {
                 body = `✅ Repository created successfully\n\n🔗 ${s.URL}`;
