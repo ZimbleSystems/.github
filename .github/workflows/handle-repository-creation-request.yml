@@ -183,7 +183,7 @@ jobs:
             }
 
             const metadata = {
-              REPO_METADATA_PRODUCTLINE: product,
+              REPO_METADATA_PRODUCT_LINE: product,
               REPO_METADATA_ASPECT: aspect,
               REPO_METADATA_NAME: name,
               REPO_METADATA_TYPE: projectType,
