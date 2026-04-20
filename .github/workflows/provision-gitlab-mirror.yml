@@ -264,7 +264,7 @@ jobs:
       # --------------------------------------------------
 
       - name: Generate GitHub App Token
-        id: generate_app_token
+        id: generate_github_app_token
         uses: actions/create-github-app-token@v3
         with:
           client-id:   ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
@@ -294,7 +294,7 @@ jobs:
           echo "GitLab Target : ${PROJECT_PATH}"
           echo ""
 
-          GITHUB_URL="https://x-access-token:${{ steps.generate_app_token.outputs.token }}@github.com/${{ github.repository }}.git"
+          GITHUB_URL="https://x-access-token:${{ steps.generate_github_app_token.outputs.token }}@github.com/${{ github.repository }}.git"
           GITLAB_URL="https://oauth2:${GITLAB_API_TOKEN}@${GITLAB_HOST#https://}/${PROJECT_PATH}.git"
 
           echo "Cloning repository in mirror mode..."

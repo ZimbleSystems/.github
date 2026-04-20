@@ -60,8 +60,8 @@ jobs:
 #? actions/create-github-app-token@v3 has app-id parameter also that parameter may provide longer living tokens. Need to dive more and explore.
 #? app-id parameter with actions/create-github-app-token@v3 is deprecated. So need to find way to increase the token validity.
       - name: Generate GitHub App Token
+        id: generate_github_app_token
         uses: actions/create-github-app-token@v3
-        id: generate_app_token
         with:
           client-id:   ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
@@ -219,7 +219,7 @@ jobs:
         env:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             try {
               const repo = await github.rest.repos.get({
@@ -262,7 +262,7 @@ jobs:
           VISIBILITY:  ${{ steps.validate_request.outputs.visibility }}
           AUTO_INIT:   ${{ steps.validate_request.outputs.auto_init }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             try {
               const repo = await github.rest.repos.createInOrg({
@@ -298,7 +298,7 @@ jobs:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
           TOPICS:     ${{ steps.validate_request.outputs.topics }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             try {
               await github.rest.repos.replaceAllTopics({
@@ -334,7 +334,7 @@ jobs:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
           METADATA:   ${{ steps.validate_request.outputs.metadata }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             const metadata = JSON.parse(process.env.METADATA);
             let failures = [];
@@ -382,7 +382,7 @@ jobs:
         env:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             let failures = [];
             let skipped = [];
@@ -475,7 +475,7 @@ jobs:
 #?         GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
 #?         GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
 #?       with:
-#?         github-token: ${{ steps.generate_app_token.outputs.token }}
+#?         github-token: ${{ steps.generate_github_app_token.outputs.token }}
 #?         script: |
 #?           const sodium = require('tweetsodium');
 #?    
@@ -551,13 +551,13 @@ jobs:
         if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
         uses: actions/github-script@v9
         env:
-          GH_TOKEN:           ${{ steps.generate_app_token.outputs.token }}
+          GH_TOKEN:           ${{ steps.generate_github_app_token.outputs.token }}
           REPO:               ${{ steps.validate_request.outputs.final_name }}
           ORG:                ${{ github.repository_owner }}
           GITLAB_API_TOKEN:   ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
         with:
-          github-token: ${{ steps.generate_app_token.outputs.token }}
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             try {
               const { execSync } = require("child_process");
