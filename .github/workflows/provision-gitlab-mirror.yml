@@ -74,6 +74,7 @@ jobs:
 
       - name: Validate Repository Metadata
         id: validate_repository_metadata
+        if: always()
         uses: actions/github-script@v9
         env:
           PRODUCT_LINE: ${{ vars.REPO_METADATA_PRODUCT_LINE }}
