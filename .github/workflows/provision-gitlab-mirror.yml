@@ -196,6 +196,28 @@ jobs:
               return created;
             }
 
+            async function findOrCreateProject(groupId, projectName) {
+              const projects = await glFetch("GET",
+                `/groups/${groupId}/projects?search=${encodeURIComponent(projectName)}&per_page=100`
+              );
+              const existing = projects.find(
+                p => p.path === projectName || p.name === projectName
+              );
+              if (existing) {
+                console.log(`  ✓ Project exists : ${existing.web_url} (id=${existing.id})`);
+                return existing;
+              }
+              console.log(`  → Creating project : ${projectName}`);
+              const created = await glFetch("POST", "/projects", {
+                name          : projectName,
+                path          : projectName,
+                namespace_id  : groupId,
+                visibility    : "private"
+              });
+              console.log(`  ✓ Project created : ${created.web_url} (id=${created.id})`);
+              return created;
+            }
+
             // ─────────────────────────────────────────────
             // Build GitLab group hierarchy
             // ─────────────────────────────────────────────
@@ -211,58 +233,25 @@ jobs:
             console.log("ℹ️ Resolving GitLab group hierarchy...");
             console.log("------------------------------------");
 
-            const orgSubgroupName = tenant ? `${GITLAB_MY_ORG_SUBGROUP}-${tenant}` : GITLAB_MY_ORG_SUBGROUP;
+            try {
+              const orgSubgroupName = tenant ? `${GITLAB_MY_ORG_SUBGROUP}-${tenant}` : GITLAB_MY_ORG_SUBGROUP;
 
-            const orgSubgroup = await findOrCreateGroup(GITLAB_TOP_LEVEL_GROUP_ID, orgSubgroupName);
-            const productLineSubgroup = await findOrCreateGroup(orgSubgroup.id, product);
-            const aspectSubgroup = await findOrCreateGroup(productLineSubgroup.id, aspect);
+              const orgSubgroup = await findOrCreateGroup(GITLAB_TOP_LEVEL_GROUP_ID, orgSubgroupName);
+              const productLineSubgroup = await findOrCreateGroup(orgSubgroup.id, product);
+              const aspectSubgroup = await findOrCreateGroup(productLineSubgroup.id, aspect);
 
-            console.log("");
-            console.log(`ℹ️ Resolved final namespace : ${aspectSubgroup.full_path}`);
+              console.log(`\nℹ️ Resolved final namespace : ${aspectSubgroup.full_path}`);
+              console.log(`\nℹ️ Searching for project '${name}'...`);
 
-            console.log("");
-            console.log(`ℹ️ Searching for project '${name}'...`);
+              const project = await findOrCreateProject(aspectSubgroup.id, name);
 
-            const projects = await glFetch("GET", `/groups/${aspectSubgroup.id}/projects?search=${encodeURIComponent(name)}&per_page=100`);
+              console.log(`\nℹ️ GitLab project path : ${project.path_with_namespace}`);
 
-            const existing = projects.find(
-              p => p.path === name || p.name === name
-            );
-
-            let projectId;
-            let projectUrl;
-            let projectPath;
-
-            if (existing) {
-
-              projectId   = existing.id;
-              projectUrl  = existing.web_url;
-              projectPath = existing.path_with_namespace;
-
-              console.log(`✓ Existing project found : ${projectUrl} (id=${projectId})`);
-
-            } else {
-
-              console.log(`ℹ️ Creating GitLab project '${name}'...`);
-
-              const created = await glFetch("POST", "/projects", {
-                name          : name,
-                path          : name,
-                namespace_id  : aspectSubgroup.id,
-                visibility    : "private"
-              });
-
-              projectId   = created.id;
-              projectUrl  = created.web_url;
-              projectPath = created.path_with_namespace;
-
-              console.log(`✓ Project created : ${projectUrl} (id=${projectId})`);
+              core.setOutput("project_path", project.path_with_namespace);
+            } catch (error) {
+              core.setFailed(`\n❌ Failed to ensure GitLab project exists\n${error.message}`);
+              core.setOutput("project_path", "");
             }
-
-            console.log("");
-            console.log(`ℹ️ GitLab project path : ${projectPath}`);
-
-            core.setOutput("project_path", projectPath);
 
       # --------------------------------------------------
       # Step 4: Generate GitHub App Token
