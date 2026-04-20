@@ -8,13 +8,19 @@ permissions:
   contents: read
 
 jobs:
-  provision:
+  sync_to_gitlab:
+    name: Sync To GitLab
     runs-on: ubuntu-latest
 
     steps:
-      - name: Read required variables & secrets
-        uses: actions/github-script@v9
 
+      # --------------------------------------------------
+      # Step 1: Validate Required Configuration
+      # --------------------------------------------------
+
+      - name: Validate Required Configuration
+        id: validate_required_config
+        uses: actions/github-script@v9
         env:
           GH_APP_ID:                 ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
           GH_APP_CLIENT_ID:          ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
@@ -23,11 +29,9 @@ jobs:
           GITLAB_API_TOKEN:          ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID || vars.GITLAB_TOP_LEVEL_GROUP_ID }}
           GITLAB_MY_ORG_SUBGROUP:    ${{ secrets.GITLAB_MY_ORG_SUBGROUP || vars.GITLAB_MY_ORG_SUBGROUP }}
-
         with:
           script: |
-
-            const requiredVarsAndSecrets = {
+            const required = {
               "GH_APP_ID"                 : process.env.GH_APP_ID,
               "GH_APP_CLIENT_ID"          : process.env.GH_APP_CLIENT_ID,
               "GH_APP_PRIVATE_KEY"        : process.env.GH_APP_PRIVATE_KEY,
@@ -37,13 +41,13 @@ jobs:
               "GITLAB_MY_ORG_SUBGROUP"    : process.env.GITLAB_MY_ORG_SUBGROUP
             };
 
-            const missingVarsAndSecrets = Object.keys(requiredVarsAndSecrets).filter((key) => !requiredVarsAndSecrets[key]);
+            const missing = Object.keys(required).filter((key) => !required[key]);
 
-            if (missingVarsAndSecrets.length > 0) {
+            if (missing.length > 0) {
               const repoFullName   = `${context.repo.owner}/${context.repo.repo}`;
               const repoVisibility = context.payload.repository.visibility;
               const isPrivateRepo  = repoVisibility === "private";
-              const errorMessage   = "\nCould not detect below required variables and secrets.\n" + missingVarsAndSecrets.map((key) => "- " + key).join("\n");
+              const errorMessage   = "\n❌ Could not detect below required variables and secrets.\n" + missing.map((key) => "- " + key).join("\n");
               let troubleshootInstructions = [];
 
               if (!isPrivateRepo) {
@@ -60,25 +64,86 @@ jobs:
 
               const troubleshootMessage = troubleshootInstructions.map((msg, index) => String(index + 1).padStart(troubleshootInstructions.length, ' ') + ". " + msg).join("\n");
 
-              core.setFailed(`${errorMessage}\n\n${troubleshootMessage}`);
+              core.setFailed(`${errorMessage}\nℹ️ Follow the below instructions\n${troubleshootMessage}`);
               return;
             }
 
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+      # --------------------------------------------------
+      # Step 2: Validate And Extract Repository Metadata
+      # --------------------------------------------------
 
-      - name: Create or update GitLab project
-        id: provision
+      - name: Validate Repository Metadata
+        id: validate_repository_metadata
         uses: actions/github-script@v9
+        env:
+          PRODUCT_LINE: ${{ vars.REPO_METADATA_PRODUCT_LINE }}
+          ASPECT:       ${{ vars.REPO_METADATA_ASPECT }}
+          NAME:         ${{ vars.REPO_METADATA_NAME }}
+          TYPE:         ${{ vars.REPO_METADATA_TYPE }}
+          TENANT:       ${{ vars.REPO_METADATA_TENANT }}
+          MANAGED:      ${{ vars.REPO_METADATA_MANAGED }}
+        with:
+          script: |
 
+            console.log("\nValidating repository metadata...");
+
+            if (!process.env.MANAGED || process.env.MANAGED.toLowerCase() !== "true") {
+              core.setFailed("❌ Repository is not configured for GitLab sync (REPO_METADATA_MANAGED != true)");
+              return;
+            }
+
+            const required = {
+              PRODUCT_LINE : process.env.PRODUCT_LINE,
+              ASPECT       : process.env.ASPECT,
+              NAME         : process.env.NAME,
+              TYPE         : process.env.TYPE,
+              MANAGED      : process.env.MANAGED
+            };
+
+            const missing = Object.entries(required)
+              .filter(([_, v]) => !v)
+              .map(([k]) => k);
+
+            if (missing.length > 0) {
+              core.setFailed(
+                `❌ Missing required metadata:\n${missing.map(m => "- REPO_METADATA_" + m).join("\n")}`
+              );
+              return;
+            }
+
+            console.log("Metadata validated successfully");
+            console.log(`ℹ️ ProductLine : ${process.env.PRODUCT_LINE}`);
+            console.log(`ℹ️ Aspect      : ${process.env.ASPECT}`);
+            console.log(`ℹ️ Repo Name   : ${process.env.NAME}`);
+            console.log(`ℹ️ Repo Type   : ${process.env.TYPE}`);
+
+            if (process.env.TENANT) {
+              console.log(`ℹ️ Tenant      : ${process.env.TENANT}`);
+            } else {
+              console.log("ℹ️ Tenant      : none");
+            }
+
+            core.setOutput("product_line", process.env.PRODUCT_LINE);
+            core.setOutput("aspect", process.env.ASPECT);
+            core.setOutput("name", process.env.NAME);
+            core.setOutput("tenant", process.env.TENANT || "");
+
+      # --------------------------------------------------
+      # Step 3: Ensure GitLab Project Exists
+      # --------------------------------------------------
+
+      - name: Ensure GitLab Project Exists
+        id: ensure_gitlab_project_exists
+        uses: actions/github-script@v9
         env:
           GITLAB_HOST:               ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN:          ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GITLAB_TOP_LEVEL_GROUP_ID: ${{ secrets.GITLAB_TOP_LEVEL_GROUP_ID || vars.GITLAB_TOP_LEVEL_GROUP_ID }}
           GITLAB_MY_ORG_SUBGROUP:    ${{ secrets.GITLAB_MY_ORG_SUBGROUP || vars.GITLAB_MY_ORG_SUBGROUP }}
-
+          PRODUCT_LINE:              ${{ steps.validate_repository_metadata.outputs.product_line }}
+          ASPECT:                    ${{ steps.validate_repository_metadata.outputs.aspect }}
+          NAME:                      ${{ steps.validate_repository_metadata.outputs.name }}
+          TENANT:                    ${{ steps.validate_repository_metadata.outputs.tenant }}
         with:
           script: |
 
@@ -87,63 +152,12 @@ jobs:
             const GITLAB_TOP_LEVEL_GROUP_ID = process.env.GITLAB_TOP_LEVEL_GROUP_ID;
             const GITLAB_MY_ORG_SUBGROUP    = process.env.GITLAB_MY_ORG_SUBGROUP;
 
-            const repoFullName = `${context.repo.owner}/${context.repo.repo}`;
-            // const repoVisibility = context.payload.repository.visibility;
-
-            console.log("\n====================================================");
-            console.log("      GitLab Mirror Provisioning Started");
-            console.log("====================================================");
-            console.log(`GitHub Repo : ${repoFullName}`);
-            console.log(`GitLab Host : ${GITLAB_HOST}`);
-            console.log("");
-
-            // ─────────────────────────────────────────────
-            // 1. Read repository topics
-            // ─────────────────────────────────────────────
-
-            console.log("Reading repository topics...");
-
-            const { data: topicData } = await github.rest.repos.getAllTopics({
-              owner : context.repo.owner,
-              repo  :  context.repo.repo
-            });
-
-            const topics = topicData.names;
-
-            console.log(`Topics detected : ${topics.join(", ")}`);
-
-            function extractTopic(prefix) {
-              const match = topics.find(t => t.startsWith(`${prefix}-`));
-              return match ? match.slice(prefix.length + 1) : null;
-            }
-
-            const product = extractTopic("product");
-            const aspect  = extractTopic("aspect");
-            const name    = extractTopic("repo");
-            const tenant  = extractTopic("tenant");
-
-            if (!product || !aspect || !name) {
-              core.setFailed(
-                `Missing required topics. Expected: product-*, aspect-*, repo-*`
-              );
-              return;
-            }
-
-            console.log("");
-            console.log("Resolved Metadata");
-            console.log("------------------------------");
-            console.log(`Product : ${product}`);
-            console.log(`Aspect  : ${aspect}`);
-            console.log(`Name    : ${name}`);
-            console.log(`Tenant  : ${tenant ?? "none"}`);
-            console.log("");
-
-            // ─────────────────────────────────────────────
-            // 2. GitLab API helpers
-            // ─────────────────────────────────────────────
+            const product = process.env.PRODUCT_LINE;
+            const aspect  = process.env.ASPECT;
+            const name    = process.env.NAME;
+            const tenant  = process.env.TENANT;
 
             async function glFetch(method, path, body) {
-
               const res = await fetch(`${GITLAB_HOST}/api/v4${path}`, {
                 method,
                 headers: {
@@ -152,47 +166,34 @@ jobs:
                 },
                 ...(body ? { body : JSON.stringify(body) } : {})
               });
-
               const data = await res.json();
-
               if (!res.ok) {
                 throw new Error(
                   `GitLab API error [${method} ${path}] -> ${JSON.stringify(data)}`
                 );
               }
-
               return data;
             }
 
-            async function findOrCreateGroup(parentId, groupPath, groupName) {
-
-              const res = await fetch(
-                `${GITLAB_HOST}/api/v4/groups/${parentId}/subgroups?search=${encodeURIComponent(groupPath)}&per_page=100`,
-                { headers: { "PRIVATE-TOKEN": GITLAB_API_TOKEN } }
+            async function findOrCreateGroup(parentId, groupName) {
+              const subgroups = await glFetch("GET",
+                `/groups/${parentId}/subgroups?search=${encodeURIComponent(groupName)}&per_page=100`
               );
-
-              const subgroups = await res.json();
-
               const existing = subgroups.find(
-                g => g.path === groupPath || g.name === groupPath
+                g => g.path === groupName || g.name === groupName
               );
-
               if (existing) {
                 console.log(`  ✓ Group exists : ${existing.full_path} (id=${existing.id})`);
                 return existing;
               }
-
               console.log(`  → Creating group : ${groupName}`);
-
               const created = await glFetch("POST", "/groups", {
                 name       : groupName,
-                path       : groupPath,
+                path       : groupName,
                 parent_id  : parseInt(parentId),
                 visibility : "private"
               });
-
               console.log(`  ✓ Group created : ${created.full_path} (id=${created.id})`);
-
               return created;
             }
 
@@ -200,63 +201,31 @@ jobs:
             // 3. Build GitLab group hierarchy
             // ─────────────────────────────────────────────
             //
-            // Without tenant:
-            //   top-level-group
-            //   └── GITLAB_MY_ORG_SUBGROUP
-            //       └── product
-            //           └── aspect
-            //               └── repo
-            //
-            // With tenant:
-            //   top-level-group
-            //   └── tenant
-            //       └── product
-            //           └── aspect
-            //               └── repo
-            //
+            // Without tenant:                  With tenant:
+            //   top-level-group                  top-level-group
+            //   └── GITLAB_MY_ORG_SUBGROUP       └── tenant
+            //       └── product                      └── product
+            //           └── aspect                       └── aspect
+            //               └── repo                         └── repo
+
 
             console.log("");
-            console.log("Resolving GitLab group hierarchy...");
+            console.log("ℹ️ Resolving GitLab group hierarchy...");
             console.log("------------------------------------");
 
-            const secondLevelPath = tenant ? `${GITLAB_MY_ORG_SUBGROUP}-${tenant}` : GITLAB_MY_ORG_SUBGROUP;
+            const orgSubgroupName = tenant ? `${GITLAB_MY_ORG_SUBGROUP}-${tenant}` : GITLAB_MY_ORG_SUBGROUP;
 
-            const secondLevel  = await findOrCreateGroup(
-              GITLAB_TOP_LEVEL_GROUP_ID,
-              secondLevelPath,
-              secondLevelPath
-            );
-
-            const productGroup = await findOrCreateGroup(
-              secondLevel.id,
-              product,
-              product
-            );
-
-            const aspectGroup = await findOrCreateGroup(
-              productGroup.id,
-              aspect,
-              aspect
-            );
+            const orgSubgroup = await findOrCreateGroup(GITLAB_TOP_LEVEL_GROUP_ID, orgSubgroupName);
+            const productLineSubgroup = await findOrCreateGroup(orgSubgroup.id, product);
+            const aspectSubgroup = await findOrCreateGroup(productLineSubgroup.id, aspect);
 
             console.log("");
-            console.log(`Resolved final namespace : ${aspectGroup.full_path}`);
-
-            // ─────────────────────────────────────────────
-            // 4. Find or create GitLab project
-            // ─────────────────────────────────────────────
-
-            // const visibility = repoVisibility === "public" ? "public" : "private";
+            console.log(`ℹ️ Resolved final namespace : ${aspectSubgroup.full_path}`);
 
             console.log("");
-            console.log(`Searching for project '${name}'...`);
+            console.log(`ℹ️ Searching for project '${name}'...`);
 
-            const projectsRes = await fetch(
-              `${GITLAB_HOST}/api/v4/groups/${aspectGroup.id}/projects?search=${encodeURIComponent(name)}&per_page=100`,
-              { headers: { "PRIVATE-TOKEN": GITLAB_API_TOKEN } }
-            );
-
-            const projects = await projectsRes.json();
+            const projects = await glFetch("GET", `/groups/${aspectSubgroup.id}/projects?search=${encodeURIComponent(name)}&per_page=100`);
 
             const existing = projects.find(
               p => p.path === name || p.name === name
@@ -276,13 +245,12 @@ jobs:
 
             } else {
 
-              console.log(`Creating GitLab project '${name}'...`);
+              console.log(`ℹ️ Creating GitLab project '${name}'...`);
 
               const created = await glFetch("POST", "/projects", {
                 name          : name,
                 path          : name,
-                namespace_id  : aspectGroup.id,
-                // visibility : visibility
+                namespace_id  : aspectSubgroup.id,
                 visibility    : "private"
               });
 
@@ -294,40 +262,87 @@ jobs:
             }
 
             console.log("");
-            console.log(`GitLab project path : ${projectPath}`);
+            console.log(`ℹ️ GitLab project path : ${projectPath}`);
 
             core.setOutput("project_path", projectPath);
 
-      # ─────────────────────────────────────────────
-      # 5. Push mirror to GitLab
-      # ─────────────────────────────────────────────
+      # --------------------------------------------------
+      # Step 4: Generate GitHub App Token
+      # --------------------------------------------------
 
       - name: Generate GitHub App Token
+        id: generate_app_token
         uses: tibdex/github-app-token@v2
-        id: app-token
         with:
           app_id:      ${{ secrets.GH_APP_ID || vars.GH_APP_ID }}
           private_key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
 
-      - name: Mirror Repository
+      # --------------------------------------------------
+      # Step 5: Mirror Repository To GitLab
+      # --------------------------------------------------
+
+      - name: Mirror Repository To GitLab
+        id: execute_gitlab_mirror_push
+        if: ${{ steps.ensure_gitlab_project_exists.outputs.project_path != '' }}
         env:
           GITLAB_HOST:      ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
-          PROJECT_PATH:     ${{ steps.provision.outputs.project_path }}
+          PROJECT_PATH:     ${{ steps.ensure_gitlab_project_exists.outputs.project_path }}
         run: |
 
-          echo ""
-          echo "--------------------------------------------------"
-          echo "Starting GitHub → GitLab mirror push"
-          echo "--------------------------------------------------"
+          set -euo pipefail
 
-          git clone --mirror https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}.git
-          cd $(basename ${{ github.repository }}).git
+          echo ""
+          echo "=================================================="
+          echo "🚀 Starting GitHub → GitLab Mirror"
+          echo "=================================================="
+
+          echo "Repository    : ${{ github.repository }}"
+          echo "GitLab Target : ${PROJECT_PATH}"
+          echo ""
+
+          GITHUB_URL="https://x-access-token:${{ steps.generate_app_token.outputs.token }}@github.com/${{ github.repository }}.git"
           GITLAB_URL="https://oauth2:${GITLAB_API_TOKEN}@${GITLAB_HOST#https://}/${PROJECT_PATH}.git"
-          git remote add gitlab "$GITLAB_URL" || true
-          git push --mirror gitlab
+
+          echo "Cloning repository in mirror mode..."
+          git clone --mirror "$GITHUB_URL" repo.git
+
+          cd repo.git
+
+          echo "Adding GitLab remote..."
+          git remote add gitlab "$GITLAB_URL"
+
+          echo "Pushing mirror..."
+
+          success=false
+
+          for i in {1..5}; do
+            echo "Attempt $i of 5..."
+            if git push --mirror gitlab; then
+              success=true
+              echo "✅ Mirror push succeeded"
+              break
+            else
+              echo "⚠️ Attempt $i failed"
+              sleep 5
+            fi
+          done
+
+          if [ "$success" = false ]; then
+            echo ""
+            echo "❌ ERROR: Mirror push failed after multiple attempts"
+            echo "Possible causes:"
+            echo "  - Invalid or expired GitLab token"
+            echo "  - Insufficient permissions on GitLab project"
+            echo "  - Network or GitLab availability issues"
+            echo ""
+            echo "Action Required:"
+            echo "  - Verify token and permissions"
+            echo "  - Retry the workflow"
+            exit 1
+          fi
 
           echo ""
-          echo "--------------------------------------------------"
-          echo "GitHub → GitLab mirror completed"
-          echo "--------------------------------------------------"
+          echo "=================================================="
+          echo "✅ GitHub → GitLab Mirror Completed Successfully"
+          echo "=================================================="
