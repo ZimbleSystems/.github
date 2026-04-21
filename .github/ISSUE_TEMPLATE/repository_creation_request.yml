@@ -103,7 +103,7 @@ body:
       label: Tenant Name (Optional)
       description: Select tenant (choose "None" if not applicable)
       options:
-        - 7-eleven
+        - 7eleven
         - mercadia
         - petro
         - telcel
