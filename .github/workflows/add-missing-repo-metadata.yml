@@ -25,13 +25,12 @@ permissions:
 
 jobs:
 
-  # --------------------------------------------------
-  # STEP 1: DISCOVER + FILTER REPOS
-  # --------------------------------------------------
-  discover:
+  discover_repositories:
+    name: Discover And Filter Repositories
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build_repository_matrix.outputs.matrix }}
+      org_vars: ${{ steps.fetch_org_variables.outputs.org_vars }}
 
     steps:
 
@@ -43,8 +42,31 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Build Repo Matrix
-        id: build-matrix
+      - name: Fetch Organization Variables
+        id: fetch_org_variables
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
+          script: |
+            try {
+              const org = context.repo.owner;
+
+              const response = await github.request(
+                "GET /orgs/{org}/actions/variables",
+                { org }
+              );
+
+              const variables = response.data.variables || [];
+              core.info(`ℹ️ Org variables fetched: ${variables.length}`);
+
+              core.setOutput("org_vars", JSON.stringify(variables));
+
+            } catch (err) {
+              core.setFailed(`❌ Failed to fetch org variables: ${err.message}`);
+            }
+
+      - name: Build Repository Matrix
+        id: build_repository_matrix
         uses: actions/github-script@v9
         env:
           PRODUCT_LINE: ${{ inputs.productLine }}
@@ -53,45 +75,28 @@ jobs:
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
-            
+
             const org = context.repo.owner;
             const productLine = process.env.PRODUCT_LINE;
             const aspect = process.env.ASPECT;
             const tenant = process.env.TENANT;
 
-            const rateLimit = await github.rest.rateLimit.get();
-            core.info(`Rate limit remaining before fetch: ${rateLimit.data.rate.remaining}`);
-
             const repos = await github.paginate(
               github.rest.repos.listForOrg,
-              {
-                org,
-                per_page: 100,
-                sort: "full_name",
-                direction: "asc",
-                type: "all"
-              }
+              { org, per_page: 100, sort: "full_name", direction: "asc", type: "all" }
             );
-
-            core.info(`Total repos fetched: ${repos.length}`);
 
             const filtered = [];
 
             for (const repo of repos) {
               try {
 
-                // ---- SKIP SPECIAL REPOS ----
-                if (
-                  repo.name === ".github" ||
-                  repo.full_name.endsWith("/.github")
-                ) {
+                if (repo.name === ".github" || repo.full_name.endsWith("/.github")) {
                   core.info(`ℹ️ Skipping special repo: ${repo.full_name}`);
                   continue;
                 }
-
-                // ---- SKIP UNWANTED TYPES ----
                 if (repo.fork || repo.archived || repo.disabled) {
-                  core.info(`ℹ️ Skipping repo (fork/archived/disabled): ${repo.full_name}`);
+                  core.info(`ℹ️ Skipping repo: ${repo.full_name} (fork: ${repo.fork}, archived: ${repo.archived}, disabled: ${repo.disabled})`);
                   continue;
                 }
 
@@ -103,20 +108,17 @@ jobs:
 
                 remaining = remaining.substring(aspect.length + 1);
 
-                let repoBase = remaining;
-                let tenantValue = null;
+                if (tenant && !remaining.endsWith(`-${tenant}`)) continue;
 
+                let repoBase = remaining;
                 if (tenant) {
-                  if (!remaining.endsWith(`-${tenant}`)) continue;
                   repoBase = remaining.slice(0, -(tenant.length + 1));
-                  tenantValue = tenant;
                 }
 
                 filtered.push({
                   repo: repo.name,
                   repoBase,
-                  private: repo.private,
-                  tenant: tenantValue
+                  private: repo.private
                 });
 
               } catch (err) {
@@ -124,9 +126,6 @@ jobs:
               }
             }
 
-            core.info(`ℹ️ Filtered repos count: ${filtered.length}`);
-
-            // ---- chunk into batches (size = 5) ----
             const batchSize = 5;
             const matrix = [];
 
@@ -138,17 +137,76 @@ jobs:
             core.info(`ℹ️ Total repos matched: ${filtered.length}`);
             core.info(`ℹ️ Total batches: ${matrix.length}`);
 
-  # --------------------------------------------------
-  # STEP 2: PROCESS IN PARALLEL BATCHES
-  # --------------------------------------------------
-  process:
-    needs: discover
+            
+  dry_run_preview:
+    name: Dry Run Preview Of Repository Updates
+    needs: discover_repositories
+    if: inputs.dryRun == true
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Display Dry Run Summary
+        id: display_dry_run_summary
+        uses: actions/github-script@v9
+        env:
+          PRODUCT_LINE: ${{ inputs.productLine }}
+          ASPECT: ${{ inputs.aspect }}
+          PROJECT_TYPE: ${{ inputs.projectType }}
+          TENANT: ${{ inputs.tenant }}
+          MATRIX: ${{ needs.discover_repositories.outputs.matrix }}
+          ORG_VARS: ${{ needs.discover_repositories.outputs.org_vars }}
+        with:
+          script: |
+
+            const matrix = JSON.parse(process.env.MATRIX);
+            const repos = matrix.flat();
+            const tenant = process.env.TENANT;
+
+            const topics = [
+              `product-${process.env.PRODUCT_LINE}`,
+              `aspect-${process.env.ASPECT}`,
+              `type-${process.env.PROJECT_TYPE}`,
+              `managed-by-platform`
+            ];
+            if (tenant) topics.push(`tenant-${tenant}`);
+
+            core.info("\n📌 Topics:");
+            topics.forEach(t => core.info(`  - ${t}`));
+
+            core.info("\n📌 Common Repo Variables:");
+            core.info(`REPO_METADATA_PRODUCT_LINE = ${process.env.PRODUCT_LINE}`);
+            core.info(`REPO_METADATA_ASPECT       = ${process.env.ASPECT}`);
+            core.info(`REPO_METADATA_MANAGED      = true`);
+            core.info(`REPO_METADATA_TYPE         = quarkus-maven-native-app`);
+            if (tenant) core.info(`REPO_METADATA_TENANT       = ${tenant}`);
+
+            const orgVars = JSON.parse(process.env.ORG_VARS || "[]");
+
+            core.info("\n📌 Org Variables:");
+            orgVars.forEach(v => core.info(`  ${v.name}`));
+
+            core.info("\n📌 Secrets (Masked):");
+            core.info("  GITLAB_API_TOKEN = ********");
+            core.info("  GH_APP_PRIVATE_KEY = ********");
+
+            for (const repo of repos) {
+              core.info(`\n🔍 ${repo.repo}`);
+              core.info(`  REPO_METADATA_NAME = ${repo.repoBase}`);
+            }
+
+            core.info(`\n✅ Dry run complete. Total repos: ${repos.length}`); 
+            
+  process_repositories:
+    name: Process Repository Metadata In Batches
+    needs: discover_repositories
+    if: inputs.dryRun == false
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        batch: ${{ fromJson(needs.discover.outputs.matrix) }}
+        batch: ${{ fromJson(needs.discover_repositories.outputs.matrix) }}
 
     steps:
 
@@ -160,8 +218,8 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Ensure GH CLI is installed
-        id: ensure_gh
+      - name: Ensure GH CLI Installed
+        id: ensure_gh_cli
         run: |
           set -e
 
@@ -170,7 +228,7 @@ jobs:
             gh --version
             echo "installed=true" >> $GITHUB_OUTPUT
           else
-            echo "gh not found. Installing..."
+            echo "ℹ️ gh not found. Installing..."
 
             if sudo apt-get update && sudo apt-get install -y gh; then
               echo "gh installed successfully"
@@ -183,135 +241,133 @@ jobs:
             fi
           fi
 
-      - name: Process Batch
+      - name: Apply Topics
+        id: apply_topics
         uses: actions/github-script@v9
         env:
+          ORG: ${{ github.repository_owner }}
           PRODUCT_LINE: ${{ inputs.productLine }}
           ASPECT: ${{ inputs.aspect }}
           PROJECT_TYPE: ${{ inputs.projectType }}
           TENANT: ${{ inputs.tenant }}
-          DRY_RUN: ${{ inputs.dryRun }}
-          ORG: ${{ github.repository_owner }}
-          GH_TOKEN: ${{ steps.generate_github_app_token.outputs.token }}
-          GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
-          GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
-            
+
             const batch = ${{ toJson(matrix.batch) }};
-            const dryRun = process.env.DRY_RUN === "true";
+            const tenant = process.env.TENANT;
+
+            const topics = [
+              `product-${process.env.PRODUCT_LINE}`,
+              `aspect-${process.env.ASPECT}`,
+              `type-${process.env.PROJECT_TYPE}`,
+              `managed-by-platform`
+            ];
+            if (tenant) topics.push(`tenant-${tenant}`);
 
             for (const item of batch) {
-              const repo = item.repo;
-              const repoBase = item.repoBase;
-              const isPrivate = item.private;
-              const tenant = item.tenant;
-
               try {
-                core.info(`\nℹ️ === Processing ${repo} ===`);
 
-                // -------------------------
-                // TOPICS
-                // -------------------------
-                const topics = [
-                  `product-${process.env.PRODUCT_LINE}`,
-                  `aspect-${process.env.ASPECT}`,
-                  `type-${process.env.PROJECT_TYPE}`,
-                  `managed-by-platform`
-                ];
+                await github.rest.repos.replaceAllTopics({
+                  owner: process.env.ORG,
+                  repo: item.repo,
+                  names: topics
+                });
 
-                if (tenant) {
-                  topics.push(`tenant-${tenant}`);
-                }
+                core.info(`✅ Topics applied: ${item.repo}`);
 
-                if (!dryRun) {
-                  await github.rest.repos.replaceAllTopics({
-                    owner: process.env.ORG,
-                    repo,
-                    names: topics
-                  });
-                }
+              } catch (err) {
+                core.error(`❌ Topic failed: ${item.repo} -> ${err.message}`);
+              }
+            }
 
-                // -------------------------
-                // VARIABLES
-                // -------------------------
+      - name: Upsert Repository Metadata Variables
+        id: upsert_repo_metadata
+        uses: actions/github-script@v9
+        env:
+          ORG: ${{ github.repository_owner }}
+          PRODUCT_LINE: ${{ inputs.productLine }}
+          ASPECT: ${{ inputs.aspect }}
+          PROJECT_TYPE: ${{ inputs.projectType }}
+          TENANT: ${{ inputs.tenant }}
+        with:
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
+          script: |
+
+            const batch = ${{ toJson(matrix.batch) }};
+            const tenant = process.env.TENANT;
+
+            for (const item of batch) {
+              try {
+
                 const variables = {
                   REPO_METADATA_PRODUCT_LINE: process.env.PRODUCT_LINE,
                   REPO_METADATA_ASPECT: process.env.ASPECT,
-                  REPO_METADATA_NAME: repoBase,
+                  REPO_METADATA_NAME: item.repoBase,
                   REPO_METADATA_MANAGED: "true",
-                  REPO_METADATA_TYPE: "quarkus-maven-native-app"
+                  REPO_METADATA_TYPE: process.env.PROJECT_TYPE
                 };
 
-                if (tenant) {
-                  variables["REPO_METADATA_TENANT"] = tenant;
-                }
+                if (tenant) variables.REPO_METADATA_TENANT = tenant;
 
                 for (const [key, value] of Object.entries(variables)) {
-                  try {
-                    if (!dryRun) {
-                      await github.request(
-                        "PUT /repos/{owner}/{repo}/actions/variables/{name}",
-                        {
-                          owner: process.env.ORG,
-                          repo,
-                          name: key,
-                          value
-                        }
-                      );
+                  await github.request(
+                    "PUT /repos/{owner}/{repo}/actions/variables/{name}",
+                    {
+                      owner: process.env.ORG,
+                      repo: item.repo,
+                      name: key,
+                      value: value
                     }
-                  } catch (e) {
-                    core.warning(`⚠️ Variable failed: ${key} -> ${e.message}`);
-                  }
+                  );
                 }
 
-                // -------------------------
-                // PRIVATE REPO HANDLING
-                // -------------------------
-                if (isPrivate) {
-
-                  core.info("ℹ️ Repo is private → syncing org variables");
-
-                  if (!dryRun) {
-
-                    // ---- Org variables → Repo variables ----
-                    try {
-                      const orgVars = await github.request(
-                        "GET /orgs/{org}/actions/variables",
-                        { org: process.env.ORG }
-                      );
-
-                      for (const v of orgVars.data.variables) {
-                        try {
-                          await github.request(
-                            "PUT /repos/{owner}/{repo}/actions/variables/{name}",
-                            {
-                              owner: process.env.ORG,
-                              repo,
-                              name: v.name,
-                              value: v.value
-                            }
-                          );
-                        } catch (err) {
-                          core.warning(`⚠️ Org var sync failed: ${v.name}`);
-                        }
-                      }
-
-                    } catch (e) {
-                      core.warning(`⚠️ Fetching org variables failed: ${e.message}`);
-                    }
-                  }
-                }
-
-                core.info(`✅ Completed ${repo}`);
+                core.info(`✅ Metadata updated: ${item.repo}`);
 
               } catch (err) {
-                core.error(`❌ Failed for ${repo}: ${err.message}`);
+                core.error(`❌ Metadata failed: ${item.repo} -> ${err.message}`);
               }
             }
-      - name: Sync Secrets to Repo
-        if: steps.ensure_gh.outputs.installed == 'true'
+
+      - name: Sync Organization Variables To Private Repos
+        id: sync_org_variables
+        uses: actions/github-script@v9
+        env:
+          ORG: ${{ github.repository_owner }}
+          ORG_VARS: ${{ needs.discover_repositories.outputs.org_vars }}
+        with:
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
+          script: |
+
+            const batch = ${{ toJson(matrix.batch) }};
+            const orgVars = JSON.parse(process.env.ORG_VARS || "[]");
+
+            for (const item of batch) {
+
+              if (!item.private) continue;
+
+              for (const v of orgVars) {
+                try {
+                  await github.request(
+                    "PUT /repos/{owner}/{repo}/actions/variables/{name}",
+                    {
+                      owner: process.env.ORG,
+                      repo: item.repo,
+                      name: v.name,
+                      value: v.value
+                    }
+                  );
+                } catch (err) {
+                  core.warning(`⚠️ Org var failed: ${item.repo} -> ${v.name}`);
+                }
+              }
+
+              core.info(`✅ Org vars synced: ${item.repo}`);
+            }
+
+      - name: Sync Repository Secrets
+        id: sync_repo_secrets
+        if: steps.ensure_gh_cli.outputs.installed == 'true'
         uses: actions/github-script@v9
         env:
           ORG: ${{ github.repository_owner }}
@@ -323,27 +379,23 @@ jobs:
           script: |
 
             const { execSync } = require('child_process');
-
             const batch = ${{ toJson(matrix.batch) }};
 
             for (const item of batch) {
-              const repo = item.repo;
-              const isPrivate = item.private;
 
-              if (!isPrivate) {
-                core.info(`ℹ️ Skipping secret sync for public repo: ${repo}`);
-                continue;
-              }
+              if (!item.private){
+                core.info(`ℹ️ Skipping secret sync for public repo: ${item.repo}`);
+                continue
+              };
 
               try {
-                core.info(`🔐 Syncing secrets for ${repo}`);
 
-                execSync(`echo "${process.env.GITLAB_API_TOKEN}" | gh secret set GITLAB_API_TOKEN --repo ${process.env.ORG}/${repo}`);
-                execSync(`echo "${process.env.GH_APP_PRIVATE_KEY}" | gh secret set GH_APP_PRIVATE_KEY --repo ${process.env.ORG}/${repo}`);
+                execSync(`echo "${process.env.GITLAB_API_TOKEN}" | gh secret set GITLAB_API_TOKEN --repo ${process.env.ORG}/${item.repo}`);
+                execSync(`echo "${process.env.GH_APP_PRIVATE_KEY}" | gh secret set GH_APP_PRIVATE_KEY --repo ${process.env.ORG}/${item.repo}`);
 
-                core.info(`✅ Secrets synced for ${repo}`);
+                core.info(`✅ Secrets synced for: ${item.repo}`);
 
-              } catch (e) {
-                core.error(`❌ Secret sync failed for ${repo}: ${e.message}`);
+              } catch (err) {
+                core.error(`❌ Secret sync failed for: ${item.repo} -> ${err.message}`);
               }
             }
