@@ -417,25 +417,100 @@ jobs:
 
             for (const item of batch) {
 
-              if (!item.private) continue;
+              const repo = item.repo;
 
-              for (const v of orgVars) {
-                try {
-                  await github.request(
-                    "PUT /repos/{owner}/{repo}/actions/variables/{name}",
-                    {
-                      owner: process.env.ORG,
-                      repo: item.repo,
-                      name: v.name,
-                      value: v.value
-                    }
-                  );
-                } catch (err) {
-                  core.warning(`⚠️ Org var failed: ${item.repo} -> ${v.name}`);
-                }
+              if (!item.private) {
+                core.info(`ℹ️ Skipping public repo: ${repo}`);
+                continue;
               }
 
-              core.info(`✅ Org vars synced: ${item.repo}`);
+              try {
+                core.info(`\nℹ️ Syncing org variables for ${repo}`);
+
+                // ---------------------------------------
+                // STEP 1: FETCH EXISTING REPO VARIABLES
+                // ---------------------------------------
+                let existingVars = {};
+
+                try {
+                  const response = await github.request(
+                    "GET /repos/{owner}/{repo}/actions/variables",
+                    {
+                      owner: process.env.ORG,
+                      repo: repo
+                    }
+                  );
+
+                  for (const v of response.data.variables) {
+                    existingVars[v.name] = v.value;
+                  }
+
+                  core.info(`ℹ️ Existing repo vars: ${Object.keys(existingVars).length}`);
+
+                } catch (err) {
+                  core.warning(`⚠️ Failed fetching repo vars for ${repo}: ${err.message}`);
+                  continue; // cannot safely proceed
+                }
+
+                // ---------------------------------------
+                // STEP 2: UPSERT ORG VARIABLES
+                // ---------------------------------------
+                for (const v of orgVars) {
+
+                  const key = v.name;
+                  const value = v.value;
+
+                  try {
+
+                    if (!(key in existingVars)) {
+                      // -------------------------
+                      // CREATE
+                      // -------------------------
+                      await github.request(
+                        "POST /repos/{owner}/{repo}/actions/variables",
+                        {
+                          owner: process.env.ORG,
+                          repo: repo,
+                          name: key,
+                          value: value
+                        }
+                      );
+
+                      core.info(`🆕 Created: ${key}`);
+
+                    } else if (existingVars[key] !== value) {
+                      // -------------------------
+                      // UPDATE
+                      // -------------------------
+                      await github.request(
+                        "PATCH /repos/{owner}/{repo}/actions/variables/{name}",
+                        {
+                          owner: process.env.ORG,
+                          repo: repo,
+                          name: key,
+                          value: value
+                        }
+                      );
+
+                      core.info(`🔄 Updated: ${key}`);
+
+                    } else {
+                      // -------------------------
+                      // NO CHANGE
+                      // -------------------------
+                      core.info(`⏭️ No change: ${key}`);
+                    }
+
+                  } catch (err) {
+                    core.warning(`⚠️ Failed ${key} for ${repo}: ${err.message}`);
+                  }
+                }
+
+                core.info(`✅ Org variables synced successfully: ${repo}`);
+
+              } catch (err) {
+                core.error(`❌ Org variable sync failed for ${repo}: ${err.message}`);
+              }
             }
 
       - name: Sync Repository Secrets
@@ -458,7 +533,7 @@ jobs:
 
               if (!item.private){
                 core.info(`ℹ️ Skipping secret sync for public repo: ${item.repo}`);
-                continue
+                continue;
               };
 
               try {
