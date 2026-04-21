@@ -159,7 +159,6 @@ jobs:
                 "managed-by-platform",
                 `product-${sanitize(product)}`,
                 `aspect-${sanitize(aspect)}`,
-                `repo-${sanitize(name)}`,
                 `type-${sanitize(projectType)}`
               ];
 
