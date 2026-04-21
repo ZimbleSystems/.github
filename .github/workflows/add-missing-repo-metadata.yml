@@ -59,21 +59,39 @@ jobs:
             const aspect = process.env.ASPECT;
             const tenant = process.env.TENANT;
 
+            const rateLimit = await github.rest.rateLimit.get();
+            core.info(`Rate limit remaining before fetch: ${rateLimit.data.rate.remaining}`);
+
             const repos = await github.paginate(
               github.rest.repos.listForOrg,
-              { org, per_page: 100 }
+              {
+                org,
+                per_page: 100,
+                sort: "full_name",
+                direction: "asc",
+                type: "all"
+              }
             );
+
+            core.info(`Total repos fetched: ${repos.length}`);
 
             const filtered = [];
 
             for (const repo of repos) {
               try {
-                // ---- STRICT SKIP ----
+
+                // ---- SKIP SPECIAL REPOS ----
                 if (
                   repo.name === ".github" ||
                   repo.full_name.endsWith("/.github")
                 ) {
-                  core.info(`Skipping special repo: ${repo.full_name}`);
+                  core.info(`ℹ️ Skipping special repo: ${repo.full_name}`);
+                  continue;
+                }
+
+                // ---- SKIP UNWANTED TYPES ----
+                if (repo.fork || repo.archived || repo.disabled) {
+                  core.info(`ℹ️ Skipping repo (fork/archived/disabled): ${repo.full_name}`);
                   continue;
                 }
 
@@ -106,6 +124,8 @@ jobs:
               }
             }
 
+            core.info(`ℹ️ Filtered repos count: ${filtered.length}`);
+
             // ---- chunk into batches (size = 5) ----
             const batchSize = 5;
             const matrix = [];
@@ -115,8 +135,8 @@ jobs:
             }
 
             core.setOutput("matrix", JSON.stringify(matrix));
-            core.info(`Total repos matched: ${filtered.length}`);
-            core.info(`Total batches: ${matrix.length}`);
+            core.info(`ℹ️ Total repos matched: ${filtered.length}`);
+            core.info(`ℹ️ Total batches: ${matrix.length}`);
 
   # --------------------------------------------------
   # STEP 2: PROCESS IN PARALLEL BATCHES
@@ -189,7 +209,7 @@ jobs:
               const tenant = item.tenant;
 
               try {
-                core.info(`\n=== Processing ${repo} ===`);
+                core.info(`\nℹ️ === Processing ${repo} ===`);
 
                 // -------------------------
                 // TOPICS
@@ -251,7 +271,7 @@ jobs:
                 // -------------------------
                 if (isPrivate) {
 
-                  core.info("Repo is private → syncing org variables");
+                  core.info("ℹ️ Repo is private → syncing org variables");
 
                   if (!dryRun) {
 
@@ -311,7 +331,7 @@ jobs:
               const isPrivate = item.private;
 
               if (!isPrivate) {
-                core.info(`Skipping secret sync for public repo: ${repo}`);
+                core.info(`ℹ️ Skipping secret sync for public repo: ${repo}`);
                 continue;
               }
 
