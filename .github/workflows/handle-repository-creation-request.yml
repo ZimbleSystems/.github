@@ -269,6 +269,7 @@ jobs:
                 name: process.env.FINAL_NAME,
                 description: process.env.DESCRIPTION,
                 visibility: process.env.VISIBILITY,
+                allow_merge_commit: false,
                 auto_init: process.env.AUTO_INIT === "true"
               });
 
