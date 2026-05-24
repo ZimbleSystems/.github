@@ -16,56 +16,54 @@ jobs:
       contains(github.event.issue.labels.*.name, 'repo-creation-request') &&
       startsWith(github.event.issue.title, '[REPO-CREATION-REQUEST]')
     runs-on: ubuntu-latest
-
     outputs:
-      validate_status:  ${{ steps.validate_request.outputs.status }}
+      validate_status: ${{ steps.validate_request.outputs.status }}
       validate_success: ${{ steps.validate_request.outputs.success }}
-      validate_error:   ${{ steps.validate_request.outputs.error }}
+      validate_error: ${{ steps.validate_request.outputs.error }}
       validate_warning: ${{ steps.validate_request.outputs.warning }}
-      validate_info:    ${{ steps.validate_request.outputs.info }}
+      validate_info: ${{ steps.validate_request.outputs.info }}
 
-      duplicate_status:  ${{ steps.check_repository_existence.outputs.status }}
+      duplicate_status: ${{ steps.check_repository_existence.outputs.status }}
       duplicate_success: ${{ steps.check_repository_existence.outputs.success }}
-      duplicate_error:   ${{ steps.check_repository_existence.outputs.error }}
+      duplicate_error: ${{ steps.check_repository_existence.outputs.error }}
 
-      create_status:   ${{ steps.create_repository.outputs.status }}
-      create_success:  ${{ steps.create_repository.outputs.success }}
-      create_error:    ${{ steps.create_repository.outputs.error }}
+      create_status: ${{ steps.create_repository.outputs.status }}
+      create_success: ${{ steps.create_repository.outputs.success }}
+      create_error: ${{ steps.create_repository.outputs.error }}
 
-      topics_status:   ${{ steps.apply_repository_topics.outputs.status }}
-      topics_success:  ${{ steps.apply_repository_topics.outputs.success }}
-      topics_error:    ${{ steps.apply_repository_topics.outputs.error }}
+      topics_status: ${{ steps.apply_repository_topics.outputs.status }}
+      topics_success: ${{ steps.apply_repository_topics.outputs.success }}
+      topics_error: ${{ steps.apply_repository_topics.outputs.error }}
 
-      metadata_status:  ${{ steps.set_repository_metadata.outputs.status }}
+      metadata_status: ${{ steps.set_repository_metadata.outputs.status }}
       metadata_success: ${{ steps.set_repository_metadata.outputs.success }}
-      metadata_error:   ${{ steps.set_repository_metadata.outputs.error }}
+      metadata_error: ${{ steps.set_repository_metadata.outputs.error }}
 
-      org_vars_status:  ${{ steps.copy_organization_variables.outputs.status }}
+      org_vars_status: ${{ steps.copy_organization_variables.outputs.status }}
       org_vars_success: ${{ steps.copy_organization_variables.outputs.success }}
-      org_vars_error:   ${{ steps.copy_organization_variables.outputs.error }}
-      org_vars_info:    ${{ steps.copy_organization_variables.outputs.info }}
+      org_vars_error: ${{ steps.copy_organization_variables.outputs.error }}
+      org_vars_info: ${{ steps.copy_organization_variables.outputs.info }}
 
-      secrets_status:  ${{ steps.sync_repository_secrets.outputs.status }}
+      secrets_status: ${{ steps.sync_repository_secrets.outputs.status }}
       secrets_success: ${{ steps.sync_repository_secrets.outputs.success }}
-      secrets_error:   ${{ steps.sync_repository_secrets.outputs.error }}
-      
-    steps:
+      secrets_error: ${{ steps.sync_repository_secrets.outputs.error }}
 
-# TODO: try actions/create-github-app-token@v3 in place of tibdex/github-app-token@v2
-#? tibdex/github-app-token@v2 is archived and perhaps lacks maintenance
-#? tibdex/github-app-token@v2 is running on Node.js 20 for which github runner support will be removed on September 16th, 2026.
-#? tibdex/github-app-token@v2 action will be forced to run with Node.js 24 by default starting June 2nd, 2026.
-#? tibdex/github-app-token@v2 may encounter unknown issues with Node.js 24. Need to test this.
-#? actions/create-github-app-token@v3 requires app client-id but the token obtained expires too soon.
-#? actions/create-github-app-token@v3 has app-id parameter also that parameter may provide longer living tokens. Need to dive more and explore.
-#? app-id parameter with actions/create-github-app-token@v3 is deprecated. So need to find way to increase the token validity.
+    steps:
+      # TODO: try actions/create-github-app-token@v3 in place of tibdex/github-app-token@v2
+      #? tibdex/github-app-token@v2 is archived and perhaps lacks maintenance
+      #? tibdex/github-app-token@v2 is running on Node.js 20 for which github runner support will be removed on September 16th, 2026.
+      #? tibdex/github-app-token@v2 action will be forced to run with Node.js 24 by default starting June 2nd, 2026.
+      #? tibdex/github-app-token@v2 may encounter unknown issues with Node.js 24. Need to test this.
+      #? actions/create-github-app-token@v3 requires app client-id but the token obtained expires too soon.
+      #? actions/create-github-app-token@v3 has app-id parameter also that parameter may provide longer living tokens. Need to dive more and explore.
+      #? app-id parameter with actions/create-github-app-token@v3 is deprecated. So need to find way to increase the token validity.
       - name: Generate GitHub App Token
         id: generate_github_app_token
         uses: actions/create-github-app-token@v3
         with:
-          client-id:   ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
+          client-id: ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
-          owner:       ${{ github.repository_owner }}
+          owner: ${{ github.repository_owner }}
 
       - name: Validate Issue Input
         id: validate_request
@@ -256,10 +254,10 @@ jobs:
         if: steps.check_repository_existence.outputs.status == 'OK'
         uses: actions/github-script@v9
         env:
-          FINAL_NAME:  ${{ steps.validate_request.outputs.final_name }}
+          FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
           DESCRIPTION: ${{ steps.validate_request.outputs.description }}
-          VISIBILITY:  ${{ steps.validate_request.outputs.visibility }}
-          AUTO_INIT:   ${{ steps.validate_request.outputs.auto_init }}
+          VISIBILITY: ${{ steps.validate_request.outputs.visibility }}
+          AUTO_INIT: ${{ steps.validate_request.outputs.auto_init }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
@@ -270,6 +268,7 @@ jobs:
                 description: process.env.DESCRIPTION,
                 visibility: process.env.VISIBILITY,
                 allow_merge_commit: false,
+                allow_squash_merge: false,
                 auto_init: process.env.AUTO_INIT === "true"
               });
 
@@ -296,7 +295,7 @@ jobs:
         uses: actions/github-script@v9
         env:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
-          TOPICS:     ${{ steps.validate_request.outputs.topics }}
+          TOPICS: ${{ steps.validate_request.outputs.topics }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
@@ -332,7 +331,7 @@ jobs:
         uses: actions/github-script@v9
         env:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
-          METADATA:   ${{ steps.validate_request.outputs.metadata }}
+          METADATA: ${{ steps.validate_request.outputs.metadata }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
@@ -464,86 +463,86 @@ jobs:
               core.setOutput("error", msg);
             }
 
-# TODO: try the below pure github-scripts rather than using GitHub Cli as child_process. 
-#?     - name: Sync Secrets to Repository
-#?       id: sync_repository_secrets
-#?       continue-on-error: true
-#?       if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
-#?       uses: actions/github-script@v9
-#?       env:
-#?         REPO: ${{ steps.validate_request.outputs.final_name }}
-#?         GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
-#?         GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
-#?       with:
-#?         github-token: ${{ steps.generate_github_app_token.outputs.token }}
-#?         script: |
-#?           const sodium = require('tweetsodium');
-#?    
-#?           const owner = context.repo.owner;
-#?           const repo  = process.env.REPO;
-#?    
-#?           async function setSecret(secretName, secretValue) {
-#?             if (!secretValue) return;
-#?    
-#?             // 1. Get public key
-#?             const { data: key } = await github.rest.actions.getRepoPublicKey({
-#?               owner,
-#?               repo
-#?             });
-#?    
-#?             // 2. Encrypt
-#?             const encryptedValue = sodium.seal(
-#?               Buffer.from(secretValue),
-#?               Buffer.from(key.key, 'base64')
-#?             );
-#?    
-#?             // 3. Upload secret
-#?             await github.rest.actions.createOrUpdateRepoSecret({
-#?               owner,
-#?               repo,
-#?               secret_name: secretName,
-#?               encrypted_value: encryptedValue.toString('base64'),
-#?               key_id: key.key_id
-#?             });
-#?           }
-#?    
-#?           let failures = [];
-#?           let successCount = 0;
-#?    
-#?           try {
-#?             await setSecret("GITLAB_API_TOKEN", process.env.GITLAB_API_TOKEN);
-#?             successCount++;
-#?    
-#?           } catch (e) {
-#?             failures.push(`GITLAB_API_TOKEN: ${e.message}`);
-#?           }
-#?    
-#?           try {
-#?             await setSecret("GH_APP_PRIVATE_KEY", process.env.GH_APP_PRIVATE_KEY);
-#?             successCount++;
-#?    
-#?           } catch (e) {
-#?             failures.push(`GH_APP_PRIVATE_KEY: ${e.message}`);
-#?           }
-#?    
-#?           if (failures.length === 0) {
-#?             core.setOutput("status", "OK");
-#?             core.setOutput("success", "✅ Secrets synced successfully.");
-#?           } else {
-#?             core.setOutput("status", "ERROR");
-#?             core.setOutput("error", `⚠️ Failed to sync some secrets:\n\n${failures.join("\n")}`);
-#?           }
-#? --------------------------------------------------------------------------------------------------
-#? tweetsodium may not be available inside the github node runner sandbox
-#? so need to try the below or else stick to gh cli as it provides out of the box secret encryption
-#?    - name: Setup Node
-#?      uses: actions/setup-node@v4
-#?    
-#?    - name: Install deps
-#?      run: npm install tweetsodium
-#?    
-#?    - name: Sync secrets
-#?      run: node scripts/sync-secrets.js
+      # TODO: try the below pure github-scripts rather than using GitHub Cli as child_process.
+      #?     - name: Sync Secrets to Repository
+      #?       id: sync_repository_secrets
+      #?       continue-on-error: true
+      #?       if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
+      #?       uses: actions/github-script@v9
+      #?       env:
+      #?         REPO: ${{ steps.validate_request.outputs.final_name }}
+      #?         GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
+      #?         GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+      #?       with:
+      #?         github-token: ${{ steps.generate_github_app_token.outputs.token }}
+      #?         script: |
+      #?           const sodium = require('tweetsodium');
+      #?
+      #?           const owner = context.repo.owner;
+      #?           const repo  = process.env.REPO;
+      #?
+      #?           async function setSecret(secretName, secretValue) {
+      #?             if (!secretValue) return;
+      #?
+      #?             // 1. Get public key
+      #?             const { data: key } = await github.rest.actions.getRepoPublicKey({
+      #?               owner,
+      #?               repo
+      #?             });
+      #?
+      #?             // 2. Encrypt
+      #?             const encryptedValue = sodium.seal(
+      #?               Buffer.from(secretValue),
+      #?               Buffer.from(key.key, 'base64')
+      #?             );
+      #?
+      #?             // 3. Upload secret
+      #?             await github.rest.actions.createOrUpdateRepoSecret({
+      #?               owner,
+      #?               repo,
+      #?               secret_name: secretName,
+      #?               encrypted_value: encryptedValue.toString('base64'),
+      #?               key_id: key.key_id
+      #?             });
+      #?           }
+      #?
+      #?           let failures = [];
+      #?           let successCount = 0;
+      #?
+      #?           try {
+      #?             await setSecret("GITLAB_API_TOKEN", process.env.GITLAB_API_TOKEN);
+      #?             successCount++;
+      #?
+      #?           } catch (e) {
+      #?             failures.push(`GITLAB_API_TOKEN: ${e.message}`);
+      #?           }
+      #?
+      #?           try {
+      #?             await setSecret("GH_APP_PRIVATE_KEY", process.env.GH_APP_PRIVATE_KEY);
+      #?             successCount++;
+      #?
+      #?           } catch (e) {
+      #?             failures.push(`GH_APP_PRIVATE_KEY: ${e.message}`);
+      #?           }
+      #?
+      #?           if (failures.length === 0) {
+      #?             core.setOutput("status", "OK");
+      #?             core.setOutput("success", "✅ Secrets synced successfully.");
+      #?           } else {
+      #?             core.setOutput("status", "ERROR");
+      #?             core.setOutput("error", `⚠️ Failed to sync some secrets:\n\n${failures.join("\n")}`);
+      #?           }
+      #? --------------------------------------------------------------------------------------------------
+      #? tweetsodium may not be available inside the github node runner sandbox
+      #? so need to try the below or else stick to gh cli as it provides out of the box secret encryption
+      #?    - name: Setup Node
+      #?      uses: actions/setup-node@v4
+      #?
+      #?    - name: Install deps
+      #?      run: npm install tweetsodium
+      #?
+      #?    - name: Sync secrets
+      #?      run: node scripts/sync-secrets.js
 
       - name: Sync Secrets to Repository
         id: sync_repository_secrets
@@ -551,10 +550,10 @@ jobs:
         if: steps.create_repository.outputs.status == 'OK' && steps.validate_request.outputs.visibility == 'private'
         uses: actions/github-script@v9
         env:
-          GH_TOKEN:           ${{ steps.generate_github_app_token.outputs.token }}
-          REPO:               ${{ steps.validate_request.outputs.final_name }}
-          ORG:                ${{ github.repository_owner }}
-          GITLAB_API_TOKEN:   ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
+          GH_TOKEN: ${{ steps.generate_github_app_token.outputs.token }}
+          REPO: ${{ steps.validate_request.outputs.final_name }}
+          ORG: ${{ github.repository_owner }}
+          GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
@@ -574,7 +573,7 @@ jobs:
               core.setOutput("status", "ERROR");
               core.setOutput("error", `⚠️ Failed to sync secrets.\n\nError: ${e.message}`);
             }
-            
+
   update_issue_status:
     name: Update Issue Status
     needs: provision_repository
