@@ -269,6 +269,7 @@ jobs:
                 visibility: process.env.VISIBILITY,
                 allow_merge_commit: false,
                 allow_squash_merge: false,
+                allow_update_branch: true,
                 auto_init: process.env.AUTO_INIT === "true"
               });
 
