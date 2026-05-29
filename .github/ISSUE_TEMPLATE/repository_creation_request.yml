@@ -53,7 +53,7 @@ body:
         - --- Backend ---
         - java-maven-library
         - nodejs-express-app
-        - python-pyproject
+        - python-pyproject-app
         - quarkus-maven-extension
         - quarkus-maven-jdk-app
         - quarkus-maven-native-app
@@ -74,7 +74,7 @@ body:
         - gitops
         - helm-charts
         - local-util-scripts
-        - python-pyproject-app
+        - python-pyproject
         - python-scripts
         - terraform-modules
         - terraform-scripts
