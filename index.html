@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eWallet Deploy</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 2.5rem 1.5rem;
+    }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 1.75rem;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 1.5rem;
+    }
+    .header-icon {
+      width: 34px; height: 34px;
+      background: #1f3a5f;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .header-icon svg { color: #58a6ff; }
+    .header-title { font-size: 1rem; font-weight: 600; color: #e6edf3; }
+    .header-sub   { font-size: 0.72rem; color: #8b949e; margin-top: 1px; }
+
+    label {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 5px;
+    }
+
+    .field { margin-bottom: 1rem; }
+
+    input[type="password"], input[type="text"], select, textarea {
+      width: 100%;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 0.875rem;
+      padding: 0.5rem 0.7rem;
+      outline: none;
+      transition: border-color 0.15s;
+      appearance: none;
+      -webkit-appearance: none;
+      font-family: inherit;
+    }
+    input:focus, select:focus { border-color: #58a6ff; box-shadow: 0 0 0 3px rgba(88,166,255,0.1); }
+    input::placeholder { color: #484f58; }
+    select option { background: #161b22; }
+
+    .select-wrap { position: relative; }
+    .select-wrap::after {
+      content: "";
+      position: absolute; right: 0.7rem; top: 50%;
+      transform: translateY(-50%);
+      border: 5px solid transparent;
+      border-top-color: #8b949e;
+      pointer-events: none;
+    }
+
+    .hint {
+      font-size: 0.7rem;
+      color: #8b949e;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    .hint a { color: #58a6ff; text-decoration: none; }
+    .hint a:hover { text-decoration: underline; }
+    .hint code { font-size: 0.68rem; background: #1c2128; padding: 1px 4px; border-radius: 3px; }
+
+    hr { border: none; border-top: 1px solid #21262d; margin: 1.1rem 0; }
+
+    /* Deployment chips */
+    .chips-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #8b949e;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .chip {
+      padding: 3px 10px;
+      border-radius: 20px;
+      border: 1px solid #30363d;
+      background: #0d1117;
+      color: #8b949e;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: all 0.12s;
+      user-select: none;
+    }
+    .chip:hover { border-color: #58a6ff; color: #58a6ff; }
+    .chip.selected { border-color: #58a6ff; background: #1f3a5f; color: #79c0ff; }
+    .chip.new-chip { border-style: dashed; color: #8b949e; }
+    .chip.new-chip:hover { border-color: #3fb950; color: #3fb950; }
+    .chip.new-chip.selected { border-color: #3fb950; background: #0f2a1a; color: #56d364; border-style: solid; }
+
+    .chips-loading {
+      font-size: 0.78rem;
+      color: #8b949e;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Inset panel for new domain / new deployment fields */
+    .inset {
+      background: #0d1117;
+      border: 1px dashed #30363d;
+      border-radius: 8px;
+      padding: 0.9rem;
+      margin-top: 6px;
+    }
+    .inset .field:last-child { margin-bottom: 0; }
+
+    /* Required badge */
+    .req {
+      font-size: 0.65rem;
+      color: #f85149;
+      margin-left: 4px;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    button[type="submit"] {
+      width: 100%;
+      background: #238636;
+      border: 1px solid #2ea043;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.6rem;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 0.25rem;
+    }
+    button[type="submit"]:hover:not(:disabled) { background: #2ea043; }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #status {
+      margin-top: 0.9rem;
+      font-size: 0.82rem;
+      border-radius: 6px;
+      padding: 0.6rem 0.8rem;
+      line-height: 1.55;
+      display: none;
+    }
+    #status.info    { background: #0c2d6b; border: 1px solid #1f6feb; color: #79c0ff; display: block; }
+    #status.success { background: #0f2a1a; border: 1px solid #2ea043; color: #56d364; display: block; }
+    #status.error   { background: #2d0f10; border: 1px solid #da3633; color: #f85149; display: block; }
+
+    .spinner {
+      display: inline-block; width: 11px; height: 11px;
+      border: 2px solid currentColor; border-top-color: transparent;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 5px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="card">
+
+  <div class="header">
+    <div class="header-icon">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+      </svg>
+    </div>
+    <div>
+      <div class="header-title">eWallet Deploy</div>
+      <div class="header-sub">Self-service · ZimbleSystems</div>
+    </div>
+  </div>
+
+  <form id="deployForm" novalidate>
+
+    <!-- ── GitHub Token ──────────────────────────────────── -->
+    <div class="field">
+      <label for="token">GitHub Token</label>
+      <div style="display:flex; gap:8px;">
+        <input type="password" id="token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="flex:1;">
+        <button type="button" id="fetchBtn" style="
+          background:#1f3a5f; border:1px solid #30363d; border-radius:6px;
+          color:#58a6ff; font-size:0.82rem; font-weight:600; padding:0 0.8rem;
+          cursor:pointer; white-space:nowrap; transition:background 0.15s;">
+          Fetch Domains
+        </button>
+      </div>
+      <div class="hint" style="margin-top:4px;">
+        Needs <strong>workflow</strong> scope.
+        <a href="https://github.com/settings/tokens/new?scopes=workflow&description=eWallet+Deploy"
+           target="_blank" rel="noopener">Create one →</a>
+      </div>
+    </div>
+    <div id="tokenStatus" class="hint" style="margin-top:-0.5rem; margin-bottom:1rem; display:none;"></div>
+
+    <hr>
+
+    <!-- ── Domain ───────────────────────────────────────── -->
+    <div class="field">
+      <label for="domain">Domain</label>
+      <div class="select-wrap">
+        <select id="domain" disabled>
+          <option value="">— enter token first —</option>
+          <option value="-- new domain --">— register new domain —</option>
+        </select>
+      </div>
+      <div class="hint" id="domainHint">Domains load automatically after token is entered.</div>
+    </div>
+
+    <!-- New domain fields -->
+    <div class="inset" id="newDomainFields" style="display:none; margin-bottom:1rem;">
+      <div class="field">
+        <label for="customDomain">Domain name <span class="req">required</span></label>
+        <input type="text" id="customDomain" placeholder="ewallet-backend">
+        <div class="hint">Must start with <code>ewallet-</code></div>
+      </div>
+      <div class="field">
+        <label for="gitRepoLink">Git Repo Link <span class="req">required</span></label>
+        <input type="text" id="gitRepoLink" placeholder="https://github.com/ZimbleSystems/ewallet-backend" autocomplete="off">
+        <div class="hint">Source code repository URL</div>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label for="fullImageRef">Full Image Reference <span class="req">required</span></label>
+        <input type="text" id="fullImageRef" placeholder="registry.gitlab.com/zimble-projects/ewallet/my-service:v1.0.0-abc" autocomplete="off">
+        <div class="hint">Include the tag — e.g. <code>registry.example.com/org/service:v1.0.0</code></div>
+      </div>
+    </div>
+
+    <!-- ── Deployment ────────────────────────────────────── -->
+    <div class="field" id="deploymentField">
+      <div class="chips-label">Deployment</div>
+
+      <!-- Chips loaded from Chart.yaml (shown for existing domains) -->
+      <div id="chipsArea" style="display:none;">
+        <div class="chips" id="chips"></div>
+        <div class="hint" style="margin-bottom:6px;">Select existing or type a new deployment name below</div>
+      </div>
+
+      <div id="chipsLoading" class="chips-loading" style="display:none;">
+        <span class="spinner"></span> Loading deployments…
+      </div>
+
+      <input type="text" id="deploymentName" placeholder="e.g. voucher-service" autocomplete="off">
+    </div>
+
+    <!-- ── Image Tag — hidden when new domain (full image ref is used instead) ── -->
+    <div class="field" id="imageTagField">
+      <label for="imageTag">Image Tag <span class="req">required</span></label>
+      <input type="text" id="imageTag" placeholder="v1.0.0-SNAPSHOT-abc1234-main" autocomplete="off">
+    </div>
+
+    <!-- ── Image Repository — only shown for new domains / new deployments ── -->
+    <div class="field" id="repoField" style="display:none;">
+      <label for="imageRepo">Image Repository <span class="req" id="repoReq" style="display:none;">required</span></label>
+      <input type="text" id="imageRepo" placeholder="registry.gitlab.com/zimble-systems/my-service" autocomplete="off">
+      <div class="hint" id="repoHint">Required for new domains and new deployments. Optional to override for existing.</div>
+    </div>
+
+    <!-- ── MongoDB + Kafka — shown only for new deployments/domains ── -->
+    <div id="extraConfigFields" style="display:none;">
+      <hr>
+
+      <!-- MongoDB -->
+      <div class="field">
+        <div class="chips-label">MongoDB</div>
+        <div class="chips">
+          <button type="button" class="chip" id="mongoNo"  onclick="setMongo(false)">No</button>
+          <button type="button" class="chip selected" id="mongoYes" onclick="setMongo(true)" style="display:none;">Yes</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:0.85rem;color:#e6edf3;">
+          <input type="checkbox" id="mongoEnabled" style="width:auto;" onchange="setMongo(this.checked)">
+          Enable MongoDB
+        </label>
+      </div>
+      <div class="inset" id="mongoFields" style="display:none; margin-bottom:1rem;">
+        <div class="field" style="margin-bottom:0;">
+          <label for="mongoDatabase">Database <span class="req">required</span></label>
+          <div class="select-wrap">
+            <select id="mongoDatabase">
+              <option value="">— select database —</option>
+              <option value="configuration">configuration</option>
+              <option value="auth">auth</option>
+              <option value="customer">customer</option>
+              <option value="notification">notification</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Kafka -->
+      <div class="field">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;text-transform:none;letter-spacing:0;font-size:0.85rem;color:#e6edf3;">
+          <input type="checkbox" id="kafkaEnabled" style="width:auto;" onchange="setKafka(this.checked)">
+          Enable Kafka
+        </label>
+      </div>
+      <div class="inset" id="kafkaFields" style="display:none; margin-bottom:1rem;">
+        <div class="field" style="margin-bottom:0;">
+          <label for="kafkaTopic">Kafka Topic <span class="req">required</span></label>
+          <input type="text" id="kafkaTopic" placeholder="ewallet-my-topic" autocomplete="off">
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" id="submitBtn">Deploy</button>
+
+  </form>
+
+  <div id="status"></div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script>
+  const GITHUB_ORG  = "ZimbleSystems";
+  const CHARTS_REPO = "ewallet-platform-charts";
+  const WORKFLOW    = "self-service-deploy.yml";
+
+  const domainSelect    = document.getElementById("domain");
+  const newDomainFields = document.getElementById("newDomainFields");
+  const customDomain    = document.getElementById("customDomain");
+  const chipsArea       = document.getElementById("chipsArea");
+  const chipsLoading    = document.getElementById("chipsLoading");
+  const chipsEl         = document.getElementById("chips");
+  const deploymentInput = document.getElementById("deploymentName");
+  const repoReq         = document.getElementById("repoReq");
+  const submitBtn       = document.getElementById("submitBtn");
+  const statusEl        = document.getElementById("status");
+  const tokenStatusEl   = document.getElementById("tokenStatus");
+  const domainHint      = document.getElementById("domainHint");
+
+  let isNewDeployment = false;
+  let knownAliases = [];
+
+  function setStatus(type, html) {
+    statusEl.className = type;
+    statusEl.innerHTML = html;
+  }
+
+  function clearStatus() {
+    statusEl.className = "";
+    statusEl.innerHTML = "";
+  }
+
+  // ── Load domains from GitHub Contents API ────────────────────────────────
+  async function loadDomains(token) {
+    tokenStatusEl.style.display = "block";
+    tokenStatusEl.textContent = "⏳ Loading domains…";
+    domainSelect.disabled = true;
+
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${GITHUB_ORG}/${CHARTS_REPO}/contents/domains`,
+        { headers: { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" } }
+      );
+
+      if (res.status === 401) {
+        tokenStatusEl.textContent = "❌ Invalid token or missing permissions.";
+        return;
+      }
+      if (!res.ok) throw new Error(`${res.status}`);
+
+      const items   = await res.json();
+      const domains = items.filter(i => i.type === "dir").map(i => i.name).sort();
+
+      // Rebuild options
+      domainSelect.innerHTML = `<option value="">— select domain —</option>`;
+      domains.forEach(d => {
+        const opt = document.createElement("option");
+        opt.value = d;
+        opt.textContent = d;
+        domainSelect.appendChild(opt);
+      });
+      const newOpt = document.createElement("option");
+      newOpt.value = "-- new domain --";
+      newOpt.textContent = "— register new domain —";
+      domainSelect.appendChild(newOpt);
+
+      domainSelect.disabled = false;
+      tokenStatusEl.textContent = `✅ ${domains.length} domain${domains.length !== 1 ? "s" : ""} loaded.`;
+      domainHint.textContent = "Select an existing domain or register a new one.";
+    } catch (e) {
+      tokenStatusEl.textContent = `❌ Could not load domains: ${e.message}`;
+      domainSelect.disabled = false;
+    }
+  }
+
+  // Fetch Domains button
+  document.getElementById("fetchBtn").addEventListener("click", () => {
+    const token = document.getElementById("token").value.trim();
+    if (!token) {
+      tokenStatusEl.style.display = "block";
+      tokenStatusEl.textContent = "❌ Enter your GitHub token first.";
+      return;
+    }
+    loadDomains(token);
+  });
+
+  // ── Domain change handler ────────────────────────────────────────────────
+  domainSelect.addEventListener("change", async () => {
+    clearStatus();
+    chipsArea.style.display = "none";
+    chipsEl.innerHTML = "";
+    chipsLoading.style.display = "none";
+    deploymentInput.value = "";
+    deploymentInput.placeholder = "e.g. voucher-service";
+    isNewDeployment = false;
+    knownAliases = [];
+    updateRepoRequired();
+
+    const val = domainSelect.value;
+
+    if (val === "-- new domain --") {
+      newDomainFields.style.display = "block";
+      customDomain.required = true;
+      document.getElementById("imageTagField").style.display = "none";
+      document.getElementById("imageTag").required = false;
+      return;
+    }
+
+    newDomainFields.style.display = "none";
+    customDomain.required = false;
+    document.getElementById("imageTagField").style.display = val ? "block" : "none";
+    document.getElementById("imageTag").required = !!val;
+
+    if (!val) return;
+
+    // Fetch Chart.yaml for this domain and show deployment chips
+    const token = document.getElementById("token").value.trim();
+    chipsLoading.style.display = "flex";
+    chipsArea.style.display = "none";
+
+    try {
+      const url = `https://api.github.com/repos/${GITHUB_ORG}/${CHARTS_REPO}/contents/domains/${val}/Chart.yaml`;
+      const res = await fetch(url, {
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        }
+      });
+
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+
+      const json  = await res.json();
+      const yaml  = jsyaml.load(atob(json.content));
+      const aliases = (yaml.dependencies || []).map(d => d.alias).filter(Boolean);
+      knownAliases = aliases;
+      // Build chips
+      chipsEl.innerHTML = "";
+      aliases.forEach(alias => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "chip";
+        chip.textContent = alias;
+        chip.addEventListener("click", () => selectChip(chip, alias, false));
+        chipsEl.appendChild(chip);
+      });
+
+      // "New deployment" chip
+      const newChip = document.createElement("button");
+      newChip.type = "button";
+      newChip.className = "chip new-chip";
+      newChip.textContent = "+ new deployment";
+      newChip.addEventListener("click", () => selectChip(newChip, "", true));
+      chipsEl.appendChild(newChip);
+
+      chipsArea.style.display = "block";
+    } catch (e) {
+      console.warn("Could not load Chart.yaml:", e.message);
+      deploymentInput.placeholder = "Enter deployment name manually";
+    } finally {
+      chipsLoading.style.display = "none";
+    }
+  });
+
+  function selectChip(chip, alias, isNew) {
+    document.querySelectorAll(".chip").forEach(c => c.classList.remove("selected"));
+    chip.classList.add("selected");
+    isNewDeployment = isNew;
+
+    if (isNew) {
+      deploymentInput.value = "";
+      deploymentInput.placeholder = "Enter new deployment name";
+      deploymentInput.focus();
+    } else {
+      deploymentInput.value = alias;
+    }
+    updateRepoRequired();
+  }
+
+  function updateRepoRequired() {
+    const isDomainNew = domainSelect.value === "-- new domain --";
+    const repoField   = document.getElementById("repoField");
+
+    // Image repo field: only for new deployments in existing domains
+    // New domains get image repo from fullImageRef inside newDomainFields
+    const showRepo = !isDomainNew && isNewDeployment;
+    repoField.style.display = showRepo ? "block" : "none";
+    repoReq.style.display   = showRepo ? "inline" : "none";
+    document.getElementById("imageRepo").required = showRepo;
+    if (!showRepo) document.getElementById("imageRepo").value = "";
+
+    // MongoDB/Kafka config: shown for new deployments AND new domains
+    const showExtra = isDomainNew || isNewDeployment;
+    document.getElementById("extraConfigFields").style.display = showExtra ? "block" : "none";
+    if (!showExtra) {
+      document.getElementById("mongoEnabled").checked = false;
+      document.getElementById("kafkaEnabled").checked = false;
+      setMongo(false);
+      setKafka(false);
+    }
+  }
+
+  function setMongo(enabled) {
+    document.getElementById("mongoEnabled").checked = enabled;
+    document.getElementById("mongoFields").style.display = enabled ? "block" : "none";
+    document.getElementById("mongoDatabase").required = enabled;
+  }
+
+  function setKafka(enabled) {
+    document.getElementById("kafkaEnabled").checked = enabled;
+    document.getElementById("kafkaFields").style.display = enabled ? "block" : "none";
+    document.getElementById("kafkaTopic").required = enabled;
+  }
+
+  deploymentInput.addEventListener("input", () => {
+    if (knownAliases.length > 0) {
+      const typed = deploymentInput.value.trim();
+      const matchesExisting = knownAliases.includes(typed);
+      isNewDeployment = typed.length > 0 && !matchesExisting;
+      document.querySelectorAll(".chip").forEach(c => {
+        if (c.classList.contains("new-chip")) {
+          c.classList.toggle("selected", isNewDeployment && typed.length > 0);
+        } else {
+          c.classList.toggle("selected", c.textContent === typed);
+        }
+      });
+    }
+    updateRepoRequired();
+  });
+
+  // ── Form submit ───────────────────────────────────────────────────────────
+  document.getElementById("deployForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearStatus();
+
+    const token        = document.getElementById("token").value.trim();
+    const domainVal    = domainSelect.value;
+    const customName   = customDomain.value.trim();
+    const deployment   = deploymentInput.value.trim();
+    const isDomainNew  = domainVal === "-- new domain --";
+
+    // For new domain: parse repo + tag from full image reference
+    let imageTag, imageRepo;
+    if (isDomainNew) {
+      const fullRef = document.getElementById("fullImageRef").value.trim();
+      const colonIdx = fullRef.lastIndexOf(":");
+      if (colonIdx < 1) return setStatus("error", "❌ Full image reference must include a tag (e.g. <code>registry/org/service:v1.0.0</code>)");
+      imageRepo = fullRef.substring(0, colonIdx);
+      imageTag  = fullRef.substring(colonIdx + 1);
+    } else {
+      imageTag  = document.getElementById("imageTag").value.trim();
+      imageRepo = document.getElementById("imageRepo").value.trim();
+    }
+
+    // Client-side validation
+    if (!token)      return setStatus("error", "❌ Enter your GitHub token.");
+    if (!domainVal)  return setStatus("error", "❌ Select a domain.");
+    if (isDomainNew && !customName)
+      return setStatus("error", "❌ Enter the new domain name.");
+    if (isDomainNew && !/^ewallet-[a-z][a-z0-9-]+$/.test(customName))
+      return setStatus("error", "❌ Domain name must match <code>ewallet-[a-z][a-z0-9-]+</code>");
+    if (isDomainNew && !document.getElementById("gitRepoLink").value.trim())
+      return setStatus("error", "❌ Enter the git repo link.");
+    if (!deployment) return setStatus("error", "❌ Enter or select a deployment name.");
+    if (!imageTag)   return setStatus("error", "❌ Enter the image tag.");
+    if (!isDomainNew && isNewDeployment && !imageRepo)
+      return setStatus("error", "❌ Image repository is required for new deployments.");
+    if (document.getElementById("mongoEnabled").checked && !document.getElementById("mongoDatabase").value)
+      return setStatus("error", "❌ Select a MongoDB database.");
+    if (document.getElementById("kafkaEnabled").checked && !document.getElementById("kafkaTopic").value.trim())
+      return setStatus("error", "❌ Enter the Kafka topic.");
+
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner"></span>Deploying…';
+    setStatus("info", '<span class="spinner"></span>Triggering workflow…');
+
+    const url = `https://api.github.com/repos/${GITHUB_ORG}/${CHARTS_REPO}/actions/workflows/${WORKFLOW}/dispatches`;
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ref: "feature-ai-deploy",
+          inputs: {
+            domain:              domainVal,
+            custom_domain_name:  isDomainNew ? customName : "",
+            deployment_name:     deployment,
+            image_tag:           imageTag,
+            image_repository:    imageRepo,
+            source_repo_url:     isDomainNew ? document.getElementById("gitRepoLink").value.trim() : "",
+            mongo_database:      document.getElementById("mongoEnabled").checked ? document.getElementById("mongoDatabase").value : "",
+            kafka_topic:         document.getElementById("kafkaEnabled").checked ? document.getElementById("kafkaTopic").value.trim() : "",
+          },
+        }),
+      });
+
+      if (res.status === 204) {
+        const runsUrl = `https://github.com/${GITHUB_ORG}/${CHARTS_REPO}/actions/workflows/${WORKFLOW}`;
+        setStatus("success",
+          `✅ Workflow triggered successfully.<br>` +
+          `<a href="${runsUrl}" target="_blank" rel="noopener" style="color:inherit;font-weight:600;">` +
+          `Watch the run →</a><br>` +
+          `<small style="opacity:.8">Deploy branch pushed. GitLab CI will pick it up and build the chart automatically.</small>`
+        );
+      } else if (res.status === 401) {
+        setStatus("error", "❌ Invalid token or missing <strong>workflow</strong> scope.");
+      } else if (res.status === 404) {
+        setStatus("error", `❌ Workflow not found. Make sure <code>${WORKFLOW}</code> is on the <code>main</code> branch.`);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setStatus("error", `❌ GitHub API error ${res.status}: ${body.message || res.statusText}`);
+      }
+    } catch (err) {
+      setStatus("error", `❌ Network error: ${err.message}`);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Deploy";
+    }
+  });
+</script>
+
+</body>
+</html>
