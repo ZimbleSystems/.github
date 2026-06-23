@@ -725,6 +725,7 @@
             mongo_database:      document.getElementById("mongoEnabled").checked ? document.getElementById("mongoDatabase").value : "",
             kafka_topic:         document.getElementById("kafkaEnabled").checked ? document.getElementById("kafkaTopic").value.trim() : "",
             env_vars:            Object.keys(envVars).length ? JSON.stringify(envVars) : "",
+            github_token:        token,
           },
         }),
       });
