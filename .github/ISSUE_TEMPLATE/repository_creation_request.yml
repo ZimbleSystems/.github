@@ -36,7 +36,7 @@ body:
       options:
         - backend
         - frontend
-        - flutter
+        - endpoint
         - platform
         - testing
         - documentation
@@ -60,15 +60,15 @@ body:
         - spring-maven-jdk-app
         - spring-maven-native-app
 
-        - --- Flutter ---
+        - --- Frontend ---
+        - flutter-webapp
+        - nextjs-webapp
+
+        - --- Endpoint ---
         - flutter-android-app
         - flutter-ios-app
-        - flutter-webapp
         - flutter-windows-app
-
-        - --- Frontend ---
         - golang-windows-app
-        - nextjs-webapp
 
         - --- Platform ---
         - cicd-util-scripts
