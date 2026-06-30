@@ -370,53 +370,61 @@ jobs:
             const PROJECT_ID       = process.env.PROJECT_ID;
 
             // Variables to sync are sourced from GitHub Actions variables and secrets.
-            // Any name beginning with the 'GL_' prefix is synced. An optional flag block
-            // may follow the prefix to set boolean GitLab properties, in any order/combo:
+            // The name follows a fixed grammar:  GL_<flags>__<name>
+            // A double underscore always separates the 'GL_' prefix (plus optional flag
+            // block) from the actual variable name. The flag block sets boolean GitLab
+            // properties, in any order/combination:
             //   M -> masked    P -> protected    R -> raw (expansion disabled)
-            // The 'GL_' prefix and the optional flag block are stripped before saving:
-            //   GL_<name>        -> masked=false, protected=false, raw=false
-            //   GL_M_<name>      -> masked
-            //   GL_P_<name>      -> protected
-            //   GL_R_<name>      -> raw
-            //   GL_MP_<name>     -> masked + protected   (order/duplication independent)
-            //   GL_MPR_<name>    -> masked + protected + raw   ... and every other combo
-            // A leading segment is only treated as flags when it is non-empty, contains
-            // only M/P/R, and has no duplicates; otherwise it is part of the name.
+            // The 'GL_<flags>__' part is stripped before saving:
+            //   GL__<name>       -> masked=false, protected=false, raw=false  (no flags)
+            //   GL_M__<name>     -> masked
+            //   GL_P__<name>     -> protected
+            //   GL_R__<name>     -> raw
+            //   GL_MP__<name>    -> masked + protected   (order/duplication independent)
+            //   GL_MPR__<name>   -> masked + protected + raw   ... and every other combo
+            // Because the name is everything after the first '__', it may itself contain
+            // underscores or flag-looking segments without ambiguity, e.g.
+            //   GL__MP_TOKEN     -> name 'MP_TOKEN', no flags
+            //   GL_M__MP_TOKEN   -> name 'MP_TOKEN', masked
             const PREFIX     = "GL_";
+            const SEPARATOR  = "__";
             const FLAG_PROPS = { M : "masked", P : "protected", R : "raw" };
 
             // Parse a GitHub key into the GitLab key + resolved flags, or null if it is
-            // not a syncable 'GL_' variable.
+            // not a syncable 'GL_<flags>__<name>' variable.
             function parseGlKey(ghKey) {
               if (!ghKey.startsWith(PREFIX)) {
                 return null;
               }
 
-              const remainder = ghKey.slice(PREFIX.length);
-              if (!remainder) {
+              // Split the prefix/flag head from the name at the first double underscore.
+              const sepIdx = ghKey.indexOf(SEPARATOR);
+              if (sepIdx === -1) {
+                return null;
+              }
+
+              const flagBlock = ghKey.slice(PREFIX.length, sepIdx);   // chars between 'GL_' and '__'
+              const name      = ghKey.slice(sepIdx + SEPARATOR.length);
+              if (!name) {
                 return null;
               }
 
               const flags = { masked : false, protected : false, raw : false };
 
-              const underscoreIdx = remainder.indexOf("_");
-              if (underscoreIdx > 0) {
-                const candidate = remainder.slice(0, underscoreIdx);
-                const name      = remainder.slice(underscoreIdx + 1);
-                const chars     = candidate.split("");
-                const allFlags  = chars.every((c) => FLAG_PROPS[c]);
-                const noDupes   = new Set(chars).size === chars.length;
-
-                if (name && allFlags && noDupes) {
-                  for (const c of chars) {
-                    flags[FLAG_PROPS[c]] = true;
-                  }
-                  return { glKey : name, ...flags };
+              // Empty flag block (GL__<name>) is valid and means "all flags default".
+              if (flagBlock.length > 0) {
+                const chars    = flagBlock.split("");
+                const allFlags = chars.every((c) => FLAG_PROPS[c]);
+                const noDupes  = new Set(chars).size === chars.length;
+                if (!allFlags || !noDupes) {
+                  return null;   // not a valid flag block -> not a syncable variable
+                }
+                for (const c of chars) {
+                  flags[FLAG_PROPS[c]] = true;
                 }
               }
 
-              // No valid flag block - the whole remainder is the variable name.
-              return { glKey : remainder, ...flags };
+              return { glKey : name, ...flags };
             }
 
             const allGhVars    = JSON.parse(process.env.ALL_GH_VARS    || "{}");
