@@ -375,13 +375,18 @@ jobs:
             // from the actual variable name. The flag block sets boolean GitLab
             // properties, in any order/combination:
             //   M -> masked    P -> protected    R -> raw (expansion disabled)
+            //   H -> masked and hidden (implies masked; value is write-only in GitLab)
             // The 'GL_<flags>__' part is stripped before saving:
             //   GL__<name>       -> masked=false, protected=false, raw=false  (no flags)
             //   GL_M__<name>     -> masked
             //   GL_P__<name>     -> protected
             //   GL_R__<name>     -> raw
+            //   GL_H__<name>     -> masked and hidden
             //   GL_MP__<name>    -> masked + protected   (order/duplication independent)
             //   GL_MPR__<name>   -> masked + protected + raw   ... and every other combo
+            // The 'hidden' visibility (H) can only be set when the variable is first
+            // created; it cannot be toggled afterwards, and GitLab never returns a hidden
+            // variable's value (so its value cannot be compared - see the sync loop).
             // The name is everything after the FIRST '__', taken verbatim. It may contain
             // underscores or flag-looking segments without ambiguity, and any extra
             // separator underscores are kept as part of the name (this is intended), e.g.
@@ -394,7 +399,7 @@ jobs:
             //   GL_X__FOO        -> name 'FOO', no flags
             const PREFIX     = "GL_";
             const SEPARATOR  = "__";
-            const FLAG_PROPS = { M : "masked", P : "protected", R : "raw" };
+            const FLAG_PROPS = { M : "masked", P : "protected", R : "raw", H : "hidden" };
 
             // Parse a GitHub key into the GitLab key + resolved flags, or null if it is
             // not a syncable 'GL_<flags>__<name>' variable.
@@ -415,7 +420,7 @@ jobs:
                 return null;
               }
 
-              const flags = { masked : false, protected : false, raw : false };
+              const flags = { masked : false, protected : false, raw : false, hidden : false };
 
               // Empty flag block (GL__<name>) means "all flags default". A non-empty block
               // is applied only when valid (known M/P/R letters, no duplicates); an invalid
@@ -484,42 +489,60 @@ jobs:
             // Track failed variables so their GitHub + GitLab names can be reported.
             const failed = [];
 
-            for (const { ghKey, glKey, value, masked, protected : isProtected, raw } of toSync) {
-              const displayValue = masked ? "***" : value;
-              const variableOptions = { ...baseVariableOptions, masked, protected : isProtected, raw };
+            for (const { ghKey, glKey, value, masked, protected : isProtected, raw, hidden } of toSync) {
+              // GitLab requires a hidden variable to also be masked.
+              const desiredMasked = masked || hidden;
+              const displayValue  = desiredMasked ? "***" : value;
+
+              // Options shared by create and update. 'masked_and_hidden' is create-only
+              // (the hidden visibility cannot be toggled afterwards), so it is added to the
+              // create body alone; updates send the resolved 'masked' value instead.
+              const sharedOptions = { ...baseVariableOptions, protected : isProtected, raw };
 
               try {
                 const existing = await glRequest("GET", `/projects/${PROJECT_ID}/variables/${glKey}`);
 
                 if (existing.status === 404) {
-                  console.log(`  → Variable not found - creating '${glKey}' (from '${ghKey}', masked=${masked}, protected=${isProtected}, raw=${raw})`);
-                  const created = await glRequest("POST", `/projects/${PROJECT_ID}/variables`, {
-                    key   : glKey,
-                    value : value,
-                    ...variableOptions
-                  });
+                  console.log(`  → Variable not found - creating '${glKey}' (from '${ghKey}', masked=${desiredMasked}, hidden=${hidden}, protected=${isProtected}, raw=${raw})`);
+                  const createBody = { key : glKey, value : value, ...sharedOptions };
+                  if (hidden) {
+                    createBody.masked_and_hidden = true;   // implies masked
+                  } else {
+                    createBody.masked = desiredMasked;
+                  }
+                  const created = await glRequest("POST", `/projects/${PROJECT_ID}/variables`, createBody);
                   if (!created.ok) {
                     throw new Error(`Failed to create variable -> ${created.status} ${JSON.stringify(created.data)}`);
                   }
                   console.log(`  ✓ Variable created : ${glKey}=${displayValue}`);
                 } else if (existing.ok) {
-                  const valueChanged     = existing.data.value !== value;
-                  const maskedChanged    = existing.data.masked !== masked;
+                  const isHiddenNow = existing.data.hidden === true;
+
+                  // Hidden visibility is fixed at creation - it cannot be toggled via the API.
+                  if (isHiddenNow !== hidden) {
+                    throw new Error(`Cannot change hidden visibility (${isHiddenNow} -> ${hidden}) via API - delete and recreate the variable in GitLab`);
+                  }
+
+                  const maskedChanged    = existing.data.masked !== desiredMasked;
                   const protectedChanged = existing.data.protected !== isProtected;
                   const rawChanged       = existing.data.raw !== raw;
+                  // Hidden variables never return their value, so it cannot be compared -
+                  // refresh it on every run to keep GitLab in sync with GitHub.
+                  const valueChanged     = hidden ? true : existing.data.value !== value;
 
                   if (!valueChanged && !maskedChanged && !protectedChanged && !rawChanged) {
                     console.log(`  ✓ Variable already up to date : ${glKey}`);
                   } else {
                     const reasons = [];
-                    if (valueChanged)     reasons.push("value changed");
-                    if (maskedChanged)    reasons.push(`masked ${existing.data.masked} -> ${masked}`);
+                    if (valueChanged)     reasons.push(hidden ? "value refreshed (hidden, cannot verify)" : "value changed");
+                    if (maskedChanged)    reasons.push(`masked ${existing.data.masked} -> ${desiredMasked}`);
                     if (protectedChanged) reasons.push(`protected ${existing.data.protected} -> ${isProtected}`);
                     if (rawChanged)       reasons.push(`raw ${existing.data.raw} -> ${raw}`);
                     console.log(`  → Variable differs (${reasons.join(", ")}) - updating '${glKey}'`);
                     const updated = await glRequest("PUT", `/projects/${PROJECT_ID}/variables/${glKey}`, {
-                      value : value,
-                      ...variableOptions
+                      value  : value,
+                      ...sharedOptions,
+                      masked : desiredMasked
                     });
                     if (!updated.ok) {
                       throw new Error(`Failed to update variable -> ${updated.status} ${JSON.stringify(updated.data)}`);
