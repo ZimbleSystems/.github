@@ -371,8 +371,8 @@ jobs:
 
             // Variables to sync are sourced from GitHub Actions variables and secrets.
             // The name follows a fixed grammar:  GL_<flags>__<name>
-            // A double underscore always separates the 'GL_' prefix (plus optional flag
-            // block) from the actual variable name. The flag block sets boolean GitLab
+            // A double underscore separates the 'GL_' prefix (plus optional flag block)
+            // from the actual variable name. The flag block sets boolean GitLab
             // properties, in any order/combination:
             //   M -> masked    P -> protected    R -> raw (expansion disabled)
             // The 'GL_<flags>__' part is stripped before saving:
@@ -382,10 +382,13 @@ jobs:
             //   GL_R__<name>     -> raw
             //   GL_MP__<name>    -> masked + protected   (order/duplication independent)
             //   GL_MPR__<name>   -> masked + protected + raw   ... and every other combo
-            // Because the name is everything after the first '__', it may itself contain
-            // underscores or flag-looking segments without ambiguity, e.g.
+            // The name is everything after the FIRST '__', taken verbatim. It may contain
+            // underscores or flag-looking segments without ambiguity, and any extra
+            // separator underscores are kept as part of the name (this is intended), e.g.
             //   GL__MP_TOKEN     -> name 'MP_TOKEN', no flags
             //   GL_M__MP_TOKEN   -> name 'MP_TOKEN', masked
+            //   GL__FOO__BAR     -> name 'FOO__BAR', no flags
+            //   GL___FOO         -> name '_FOO', no flags   (leading underscore preserved)
             // An invalid flag block (unknown letters or duplicates) is tolerated: the
             // variable is still synced with all flags defaulted to false, e.g.
             //   GL_X__FOO        -> name 'FOO', no flags
