@@ -2,7 +2,17 @@ name: Provision GitLab Mirror
 
 on:
   workflow_dispatch:
+    inputs:
+      auto_build:
+        description: "Auto-run the build for the selected branch on GitLab"
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      auto_build:
+        description: "Auto-run the build for the selected branch on GitLab"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -687,6 +697,7 @@ jobs:
           GITLAB_HOST:      ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_PATH:     ${{ steps.ensure_gitlab_project_exists.outputs.project_path }}
+          AUTO_BUILD:       ${{ inputs.auto_build }}
         run: |
           set -euo pipefail
 
@@ -710,23 +721,45 @@ jobs:
           echo "Adding GitLab remote..."
           git remote add gitlab "$GITLAB_URL"
 
-          echo "Pushing mirror..."
-
-          success=false
-
-          for i in {1..5}; do
-            echo "Attempt $i of 5..."
-            if git push --mirror gitlab; then
-              success=true
-              echo "✅ Mirror push succeeded"
-              break
-            else
+          # Retry a git push up to 5 times. Usage: push_with_retry <push args...>
+          push_with_retry() {
+            for i in {1..5}; do
+              echo "Attempt $i of 5..."
+              if git push "$@"; then
+                echo "✅ Push succeeded"
+                return 0
+              fi
               echo "⚠️ Attempt $i failed"
               sleep 5
-            fi
-          done
+            done
+            return 1
+          }
 
-          if [ "$success" = false ]; then
+          # ------------------------------------------------------------------
+          # Controlled automation (opt-in via the auto_build checkbox):
+          # When enabled and the workflow was dispatched on a branch, push THAT
+          # branch first with a GitLab CI push option so its pipeline auto-runs
+          # the build (rule: $AUTO_BUILD == "true"). Because this advances the
+          # branch to its final SHA, the subsequent --mirror push is a no-op for
+          # it and GitLab starts no second (manual) pipeline. Tags are skipped
+          # here - they already auto-build via their own rule.
+          # ------------------------------------------------------------------
+          if [ "${AUTO_BUILD}" = "true" ] && [ "${GITHUB_REF_TYPE}" = "branch" ]; then
+            echo ""
+            echo "Auto-build enabled - targeted push of branch '${GITHUB_REF_NAME}' with AUTO_BUILD=true..."
+            if ! push_with_retry -o ci.variable="AUTO_BUILD=true" gitlab \
+                 "refs/heads/${GITHUB_REF_NAME}:refs/heads/${GITHUB_REF_NAME}"; then
+              echo ""
+              echo "❌ ERROR: Targeted auto-build push failed after multiple attempts"
+              exit 1
+            fi
+          else
+            echo "Auto-build not applied (auto_build=${AUTO_BUILD:-unset}, ref_type=${GITHUB_REF_TYPE:-unknown})."
+          fi
+
+          echo ""
+          echo "Pushing mirror..."
+          if ! push_with_retry --mirror gitlab; then
             echo ""
             echo "❌ ERROR: Mirror push failed after multiple attempts"
             echo "Possible causes:"
