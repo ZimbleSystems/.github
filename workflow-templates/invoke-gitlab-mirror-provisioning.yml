@@ -2,8 +2,14 @@ name: Invoke GitLab Mirror Provisioning
 
 on:
   workflow_dispatch:
+    inputs:
+      auto_build:
+        description: "Auto-run the build for the selected branch on GitLab"
+        type: boolean
 
 jobs:
   mirror:
     uses: zimble-gh/.github/.github/workflows/provision-gitlab-mirror.yml@main
     secrets: inherit
+    with:
+      auto_build: ${{ inputs.auto_build }}
