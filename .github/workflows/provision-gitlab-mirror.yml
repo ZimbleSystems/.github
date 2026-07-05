@@ -746,6 +746,9 @@ jobs:
 
           BRANCH="${GITHUB_REF_NAME}"
 
+          # Compliant branch names (must match the definitions' workflow: rules).
+          COMPLIANT_RE='^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
+
           # Retry a git push up to 5 times. Usage: push_with_retry <push args...>
           push_with_retry() {
             for i in {1..5}; do
@@ -785,7 +788,7 @@ jobs:
           # 2) A pipeline is only created for compliant branch names (matching the
           # definitions' workflow: rules), so a non-compliant branch must NOT be
           # pushed for a build - it would never build anyway.
-          if ! printf '%s' "$BRANCH" | grep -qE '^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'; then
+          if ! printf '%s' "$BRANCH" | grep -qE "$COMPLIANT_RE"; then
             echo "::warning::Branch '${BRANCH}' is not a compliant branch name - not pushing; GitLab would not create a pipeline."
             skip_summary "⚠️ **No build triggered** — branch \`${BRANCH}\` is not a compliant branch name, so it was not pushed for a build (GitLab would not create a pipeline for it)."
             add_summary ""
