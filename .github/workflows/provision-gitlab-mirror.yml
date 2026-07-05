@@ -846,6 +846,17 @@ jobs:
           fi
           echo "ℹ️ Container definition detected: ${MATCHED}"
 
+          # A pipeline is only created for compliant branch names (matching the
+          # definitions' workflow: rules). A non-compliant branch is mirrored but
+          # never builds, so report that instead of deriving an image URL.
+          if ! printf '%s' "$BRANCH" | grep -qE '^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'; then
+            echo "::warning::Branch '${BRANCH}' is not a compliant branch name - GitLab will not create a pipeline, so no build runs."
+            skip_summary "⚠️ **No build triggered** — branch \`${BRANCH}\` is not a compliant branch name, so GitLab does not create a pipeline for it and nothing is built."
+            add_summary ""
+            add_summary "Compliant branch names are: \`feature/*\`, \`fix/*\`, \`chore/*\`, \`hotfix/vX.Y.Z\`, \`release/vX.Y\`, and \`main\`."
+            exit 0
+          fi
+
           # pom.xml is required both to build the image and to derive its version.
           POM="$(git show "refs/heads/${BRANCH}:pom.xml" 2>/dev/null || true)"
           if [ -z "$POM" ]; then
