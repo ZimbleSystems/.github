@@ -1057,39 +1057,38 @@ jobs:
           fi
 
           # ------------------------------------------------------------------
-          # Job summary — what was synced / skipped / deleted, per category.
+          # Job summary — one cohesive section per branch category: a short
+          # description, a one-row count table, and the branch names with copy
+          # buttons (row-level "copy all" + one per branch). Fenced code blocks
+          # are the only Markdown element GitHub gives a copy button.
           # ------------------------------------------------------------------
-          # Emit a copyable section for one category. Renders (only when the list
-          # is non-empty): a heading, one code block with the whole list (the
-          # row-level "copy all" button), then one code block per branch (the
-          # per-branch copy button). Fenced code blocks are the only Markdown
-          # element GitHub gives a copy button, and they can't go inside a table
-          # cell - hence a section here rather than a column.
-          emit_copy_section() {
-            local heading="$1"; shift
-            [ "$#" -gt 0 ] || return 0
-            printf '#### %s (%s)\n\n' "$heading" "$#"
-            printf 'Copy all:\n\n'
-            printf '```text\n'
-            printf '%s\n' "$@"
-            printf '```\n\n'
-            printf 'Copy individually:\n\n'
-            local b
-            for b in "$@"; do printf '```text\n%s\n```\n\n' "$b"; done
+          emit_category() {
+            # $1 heading  $2 description  $3 source  $4 reason ; rest = branch names
+            local heading="$1" desc="$2" source="$3" reason="$4"; shift 4
+            printf '### %s\n\n' "$heading"
+            printf '%s\n\n' "$desc"
+            printf '| Source | Reason | Count |\n'
+            printf '| --- | --- | --: |\n'
+            printf '| %s | %s | %s |\n\n' "$source" "$reason" "$#"
+            if [ "$#" -gt 0 ]; then
+              printf 'Copy all:\n\n'
+              printf '```text\n'
+              printf '%s\n' "$@"
+              printf '```\n\n'
+              printf 'Copy individually:\n\n'
+              local b
+              for b in "$@"; do printf '```text\n%s\n```\n\n' "$b"; done
+            else
+              printf '_No branches in this category._\n\n'
+            fi
           }
 
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
               printf '\n---\n\n---\n\n'
               printf '## Mirror Repository To GitLab\n\n'
-              printf '### 🔁 Mirror sync summary — `%s`\n\n' "${GITHUB_REPOSITORY:-repository}"
-              printf '| Operation | Source | Reason | Count |\n'
-              printf '| --- | --- | --- | --: |\n'
-              printf '| ✅ Synced | GitHub | compliant | %s |\n'                "${#SYNCED[@]}"
-              printf '| ⏭️ Skipped | GitHub | non-compliant | %s |\n'           "${#SKIPPED[@]}"
-              printf '| 🗑️ Deleted | GitLab | non-compliant | %s |\n'           "${#DEL_NONCOMPLIANT[@]}"
-              printf '| 🗑️ Deleted | GitLab | stale (gone from GitHub) | %s |\n' "${#DEL_STALE[@]}"
-              printf '\n'
+              printf '### 🔁 Branch sync summary — `%s`\n\n' "${GITHUB_REPOSITORY:-repository}"
+              printf 'This run mirrored **branches** from GitHub to GitLab. Each section below is one outcome — a one-line count table plus the affected branch names (with copy buttons).\n\n'
 
               # Conditional push/delete status notes.
               if [ "$PUSH_STATUS" = "failed" ]; then
@@ -1101,11 +1100,18 @@ jobs:
                 printf '> ⚠️ **One or more branch deletions FAILED** (the branches may be protected) — check the step log.\n\n'
               fi
 
-              # Copyable branch lists (row-level "copy all" + per-branch buttons).
-              emit_copy_section "✅ Synced — GitHub (compliant)"       "${SYNCED[@]}"
-              emit_copy_section "⏭️ Skipped — GitHub (non-compliant)"  "${SKIPPED[@]}"
-              emit_copy_section "🗑️ Deleted — GitLab (non-compliant)"  "${DEL_NONCOMPLIANT[@]}"
-              emit_copy_section "🗑️ Deleted — GitLab (stale)"          "${DEL_STALE[@]}"
+              emit_category "✅ Synced to GitLab" \
+                "Compliant GitHub branches pushed to GitLab." \
+                "GitHub" "compliant" "${SYNCED[@]}"
+              emit_category "⏭️ Skipped (not synced)" \
+                "Non-compliant GitHub branches — never pushed, so they do not build." \
+                "GitHub" "non-compliant" "${SKIPPED[@]}"
+              emit_category "🗑️ Deleted from GitLab (non-compliant)" \
+                "GitLab branches removed because their name is not compliant." \
+                "GitLab" "non-compliant" "${DEL_NONCOMPLIANT[@]}"
+              emit_category "🗑️ Deleted from GitLab (stale)" \
+                "GitLab branches removed because they no longer exist on GitHub." \
+                "GitLab" "stale" "${DEL_STALE[@]}"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
