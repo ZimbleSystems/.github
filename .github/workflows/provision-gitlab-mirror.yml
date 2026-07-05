@@ -771,6 +771,15 @@ jobs:
           # and calls finish - all summary content for the step lives here.
           # ------------------------------------------------------------------
           OUTCOME=""
+          BUILD_TRIGGERED="no"   # set to "yes" once the branch is pushed to trigger a build
+
+          # Manual-build instructions, shown when no build was triggered this run.
+          print_manual_steps() {
+            printf 'To build this commit, do one of the following in GitLab (**CI/CD → Pipelines**):\n\n'
+            printf -- '- **Re-run** the build job in the pipeline that may already exist for this commit, or\n'
+            printf -- '- **Create a new pipeline** for `%s` and start the build job manually from the pipeline screen.\n\n' "$BRANCH"
+          }
+
           finish() {
             local code="$1"
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -788,37 +797,48 @@ jobs:
                   no-ci)
                     printf '### ℹ️ No build triggered — `%s`\n\n' "$BRANCH"
                     printf 'No `.gitlab-ci.yml` on branch `%s`, so no pipeline can run and there is nothing to build.\n' "$BRANCH" ;;
-                  no-op)
-                    printf '### ℹ️ No build triggered — `%s`\n\n' "$BRANCH"
-                    printf 'Branch `%s` is already up to date on GitLab (commit `%s`). There are no new commits to push, so no new pipeline was created and nothing was built by this run.\n\n' "$BRANCH" "${LOCAL_SHA:0:8}"
-                    printf 'To build this commit, do one of the following in GitLab (**CI/CD → Pipelines**):\n\n'
-                    printf -- '- **Re-run** the build job in the pipeline that may already exist for this commit, or\n'
-                    printf -- '- **Create a new pipeline** for `%s` and start the build job manually from the pipeline screen.\n' "$BRANCH" ;;
                   push-failed)
                     printf '### ❌ Build not triggered — `%s`\n\n' "$BRANCH"
                     printf 'The targeted push to GitLab failed after multiple attempts, so no pipeline was created. Check the step log and retry.\n' ;;
                   non-container)
-                    printf '### ℹ️ Build triggered — `%s`\n\n' "$BRANCH"
+                    printf '### ℹ️ No container image — `%s`\n\n' "$BRANCH"
                     printf 'This repo uses a non-container build definition (`%s`), so there is no container image URL.\n\n' "${DEFS:-none}"
+                    if [ "$BUILD_TRIGGERED" = "yes" ]; then
+                      printf 'A build was triggered for this branch.\n\n'
+                    else
+                      printf 'Branch `%s` is already up to date on GitLab, so no new build was triggered by this run.\n\n' "$BRANCH"
+                      print_manual_steps
+                    fi
                     printf 'Container image URLs are derived only for these container-build definitions (as of now): %s.\n' "$CTLIST" ;;
                   no-pom)
-                    printf '### ⚠️ Build triggered, but no image URL — `%s`\n\n' "$BRANCH"
-                    printf 'No `pom.xml` on branch `%s`. The container build will fail and the image reference cannot be derived.\n' "$BRANCH" ;;
+                    printf '### ⚠️ No image reference — `%s`\n\n' "$BRANCH"
+                    printf 'No `pom.xml` on branch `%s`, so the image reference cannot be derived and a container build would fail.\n' "$BRANCH"
+                    [ "$BUILD_TRIGGERED" = "yes" ] || printf '\nBranch is already up to date on GitLab; no new build was triggered.\n' ;;
                   bad-version)
-                    printf '### ⚠️ Build triggered, but no image URL — `%s`\n\n' "$BRANCH"
-                    printf 'Could not read a literal semver `project.version` from `pom.xml` (got `%s`). Check the pipeline for the actual image tag.\n' "${VERSION:-empty}" ;;
+                    printf '### ⚠️ No image reference — `%s`\n\n' "$BRANCH"
+                    printf 'Could not read a literal semver `project.version` from `pom.xml` (got `%s`), so the image reference cannot be derived.\n' "${VERSION:-empty}" ;;
                   no-registry)
-                    printf '### ⚠️ Build triggered, but no image URL — `%s`\n\n' "$BRANCH"
-                    printf 'Could not read `container_registry_image_prefix` from the GitLab API.\n' ;;
+                    printf '### ⚠️ No image reference — `%s`\n\n' "$BRANCH"
+                    printf 'Could not read `container_registry_image_prefix` from the GitLab API, so the image reference cannot be derived.\n' ;;
                   success)
-                    printf '### 📦 Container image (auto-build) — `%s`\n\n' "$BRANCH"
-                    printf 'Ahead-of-time image reference (derived _before_ the build runs):\n\n'
-                    printf '```\n%s\n```\n\n' "$IMAGE_URL"
-                    printf '> ⚠️\n>\n'
-                    printf '> **Predicted value — not yet built.** This reference becomes valid **only after** the `build-native-image` job completes successfully and publishes the image to the GitLab Container Registry.\n>\n'
-                    printf '> Do **NOT** assume the build will succeed — wait for the build/publish job in the pipeline to finish before pulling or referencing this image.\n\n'
+                    printf '### 📦 Container image — `%s`\n\n' "$BRANCH"
+                    if [ "$BUILD_TRIGGERED" = "yes" ]; then
+                      printf 'A build was **triggered** for this branch. Once the `build-native-image` job completes and publishes, the image will be available at the reference below.\n\n'
+                    else
+                      printf 'Branch `%s` is **already up to date** on GitLab (commit `%s`), so **no new build was triggered** by this run. This image **may already have been built and published** by an earlier pipeline at the reference below — and if not, it will be produced at that same reference once you build it (steps below).\n\n' "$BRANCH" "$SHORT_SHA"
+                    fi
+                    printf '> 📋 **Image reference** — hover the box below and click the copy icon:\n\n'
+                    printf '```text\n%s\n```\n\n' "$IMAGE_URL"
+                    if [ "$BUILD_TRIGGERED" = "yes" ]; then
+                      printf '> ⚠️\n>\n'
+                      printf '> **Predicted value — not yet built.** Valid **only after** the `build-native-image` job completes successfully and publishes to the GitLab Container Registry.\n>\n'
+                      printf '> Do **NOT** assume the build will succeed — wait for the build/publish job to finish before pulling or referencing this image.\n\n'
+                    else
+                      print_manual_steps
+                      printf '> ⚠️ Do **NOT** assume this image already exists — confirm it in the Container Registry (or wait for a build to publish it) before pulling or deploying.\n\n'
+                    fi
                     printf '#### ℹ️ How this reference was computed\n\n'
-                    printf 'It is assembled ahead of time (before the GitLab pipeline runs) from data already known at mirror time, mirroring exactly what the `build-native-image` job will tag and push:\n\n'
+                    printf 'It is assembled from data already known at mirror time, mirroring exactly what the `build-native-image` job tags and pushes:\n\n'
                     printf '| Part | Value | Source |\n'
                     printf '| --- | --- | --- |\n'
                     printf '| Registry | `%s` | `container_registry_image_prefix` from the GitLab project API (= `$CI_REGISTRY_IMAGE`) |\n' "$REGISTRY_IMAGE"
@@ -826,7 +846,7 @@ jobs:
                     printf '| Commit SHA | `%s` | first 8 chars of the branch-tip commit SHA |\n' "$SHORT_SHA"
                     printf '| Branch slug | `%s` | branch name with slashes (`/`) replaced by hyphens (`-`), cut to 20 chars |\n' "$BRANCH_SLUG"
                     printf '| **Tag** | `%s` | `v<version>-<commit-sha>-<branch-slug>` |\n\n' "$IMAGE_TAG"
-                    printf '**Suggested use:** pre-fill deployment manifests, release notes, or a `docker pull` command with this reference now — but keep it provisional and confirm the pipeline'\''s build/publish job is green before actually pulling or deploying it.\n' ;;
+                    printf '**Suggested use:** pre-fill deployment manifests, release notes, or a `docker pull` command with this reference now — but keep it provisional and confirm the build/publish job is green before actually pulling or deploying it.\n' ;;
                 esac
               } >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -859,29 +879,30 @@ jobs:
             OUTCOME="no-ci"; finish 0
           fi
 
-          # 4) No new commits => the push would be a no-op and GitLab creates no pipeline.
+          # 4) Push only if there are new commits. If the branch is already up to
+          # date on GitLab it is a no-op (GitLab creates no pipeline) - but we STILL
+          # derive the image reference below, framed as "already synced" so the user
+          # knows it may already exist or can be built manually.
           LOCAL_SHA="$(git rev-parse "refs/heads/${BRANCH}")"
           REMOTE_SHA="$(git ls-remote gitlab "refs/heads/${BRANCH}" 2>/dev/null | awk 'NR==1{print $1}')"
           if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-            echo "ℹ️ Branch '${BRANCH}' already up to date on GitLab (${LOCAL_SHA}); not pushing."
-            OUTCOME="no-op"; finish 0
+            echo "ℹ️ Branch '${BRANCH}' already up to date on GitLab (${LOCAL_SHA}); not pushing (no-op)."
+            BUILD_TRIGGERED="no"
+          else
+            echo ""
+            echo "Auto-build enabled - pushing branch '${BRANCH}' to trigger its build pipeline..."
+            if ! push_with_retry -o ci.variable="AUTO_BUILD=true" gitlab \
+                 "refs/heads/${BRANCH}:refs/heads/${BRANCH}"; then
+              echo "::error::Targeted auto-build push failed after multiple attempts."
+              OUTCOME="push-failed"; finish 1
+            fi
+            BUILD_TRIGGERED="yes"
           fi
 
           # ==================================================================
-          # PUSH - checks passed: push the branch so its pipeline is created and
-          # the build runs automatically. On failure, defer the disruption to
-          # finish (writes the summary first, then exits non-zero).
-          # ==================================================================
-          echo ""
-          echo "Auto-build enabled - pushing branch '${BRANCH}' to trigger its build pipeline..."
-          if ! push_with_retry -o ci.variable="AUTO_BUILD=true" gitlab \
-               "refs/heads/${BRANCH}:refs/heads/${BRANCH}"; then
-            echo "::error::Targeted auto-build push failed after multiple attempts."
-            OUTCOME="push-failed"; finish 1
-          fi
-
-          # ==================================================================
-          # PHASE 2 - Image URL (container-build repos only).
+          # PHASE 2 - Image reference (container-build repos only). Runs whether a
+          # build was just triggered (new commits) or skipped (no-op / already
+          # synced); the wording in finish adapts to BUILD_TRIGGERED.
           # ==================================================================
 
           # Which centralized definition does this repo include? Take every
