@@ -750,6 +750,8 @@ jobs:
           # own GitLab rule).
           if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
             echo "ℹ️ Dispatched on a ${GITHUB_REF_TYPE} ('${BRANCH}'), not a branch - skipping auto-build."
+            [ -n "${GITHUB_STEP_SUMMARY:-}" ] && \
+              printf 'ℹ️ **Auto-build skipped** — dispatched on a %s (`%s`), not a branch.\n' "${GITHUB_REF_TYPE}" "$BRANCH" >> "$GITHUB_STEP_SUMMARY" || true
             exit 0
           fi
 
@@ -774,11 +776,21 @@ jobs:
           # ------------------------------------------------------------------
           # Derive & display the container image URL (container-build repos only)
           # ------------------------------------------------------------------
+          # Summary helpers (write to the GitHub Actions job summary, if present).
+          add_summary() { [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY" || true; }
+          skip_summary() {
+            printf -v _hdr '### 📦 Container image (auto-build) — `%s`' "$BRANCH"
+            add_summary "$_hdr"
+            add_summary ""
+            add_summary "$1"
+          }
+
           # No .gitlab-ci.yml on the branch => no GitLab pipeline runs => nothing
           # to build, so there is no image URL to show.
           CI_FILE="$(git show "refs/heads/${BRANCH}:.gitlab-ci.yml" 2>/dev/null || true)"
           if [ -z "$CI_FILE" ]; then
             echo "ℹ️ No .gitlab-ci.yml on '${BRANCH}' - no pipeline will run; skipping image URL."
+            skip_summary "ℹ️ **Skipped** — no \`.gitlab-ci.yml\` on this branch, so no pipeline runs and there is nothing to build."
             exit 0
           fi
 
@@ -802,6 +814,8 @@ jobs:
 
           if [ -z "$MATCHED" ]; then
             echo "ℹ️ '${BRANCH}' uses a non-container definition (${DEFS:-none}); skipping image URL."
+            printf -v _msg 'ℹ️ **Skipped** — this repo uses a non-container build definition (`%s`); no container image is produced.' "${DEFS:-none}"
+            skip_summary "$_msg"
             exit 0
           fi
           echo "ℹ️ Container definition detected: ${MATCHED}"
@@ -810,6 +824,7 @@ jobs:
           POM="$(git show "refs/heads/${BRANCH}:pom.xml" 2>/dev/null || true)"
           if [ -z "$POM" ]; then
             echo "::warning::No pom.xml on '${BRANCH}' - the container build cannot run and the image URL cannot be derived. Skipping."
+            skip_summary "⚠️ **Skipped** — no \`pom.xml\` on this branch. The container build cannot run and the image reference cannot be derived."
             exit 0
           fi
 
@@ -825,6 +840,8 @@ jobs:
 
           if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-SNAPSHOT)?$'; then
             echo "::warning::Could not parse a literal semver project.version from pom.xml (got '${VERSION:-empty}'); skipping image URL."
+            printf -v _msg '⚠️ **Skipped** — could not read a literal semver `project.version` from `pom.xml` (got `%s`).' "${VERSION:-empty}"
+            skip_summary "$_msg"
             exit 0
           fi
 
@@ -842,6 +859,7 @@ jobs:
 
           if [ -z "$REGISTRY_IMAGE" ]; then
             echo "::warning::Could not read container_registry_image_prefix from the GitLab API; skipping image URL."
+            skip_summary "⚠️ **Skipped** — could not read \`container_registry_image_prefix\` from the GitLab API."
             exit 0
           fi
 
@@ -854,9 +872,13 @@ jobs:
 
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
-              echo "### 📦 Container image (auto-build)"
-              echo ""
-              echo "Branch \`${BRANCH}\` → \`${IMAGE_URL}\`"
+              printf '### 📦 Container image (auto-build) — `%s`\n\n' "$BRANCH"
+              printf 'Ahead-of-time image reference (derived _before_ the build runs):\n\n'
+              printf '```\n%s\n```\n\n' "$IMAGE_URL"
+              printf '> ⚠️ **Predicted value — not yet built.** This reference is computed ahead of time from the branch name and the pom version.\n'
+              printf '> It becomes valid **only after** the `build-native-image` job completes successfully and publishes the image to the GitLab Container Registry.\n'
+              printf '>\n'
+              printf '> Do **not** assume the build will succeed — wait for the build/publish job in the pipeline to finish before pulling or referencing this image.\n'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
