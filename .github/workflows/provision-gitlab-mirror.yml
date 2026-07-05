@@ -22,6 +22,11 @@ jobs:
     name: Sync To GitLab
     runs-on: ubuntu-latest
 
+    env:
+      # Compliant branch names (must match the definitions' workflow: rules).
+      # Shared by the auto-build and mirror-push steps.
+      COMPLIANT_RE: '^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
+
     steps:
 
       # --------------------------------------------------
@@ -746,9 +751,6 @@ jobs:
 
           BRANCH="${GITHUB_REF_NAME}"
 
-          # Compliant branch names (must match the definitions' workflow: rules).
-          COMPLIANT_RE='^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
-
           # Retry a git push up to 5 times. Usage: push_with_retry <push args...>
           push_with_retry() {
             for i in {1..5}; do
@@ -980,8 +982,6 @@ jobs:
           # - Tags are intentionally NOT pushed: release tags originate on GitLab
           #   (create-release-tag) and sync GitLab -> GitHub; pushing them back would
           #   reverse that and hit protected-tag rules.
-          COMPLIANT_RE='^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
-
           fail() {
             echo ""
             echo "❌ ERROR: $1 failed after multiple attempts"
