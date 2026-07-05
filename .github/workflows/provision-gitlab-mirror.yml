@@ -965,16 +965,20 @@ jobs:
             return 1
           }
 
-          # Mirror BRANCHES ONLY, with a namespace-scoped prune.
-          # - Not `git push --mirror`: that pushes all of refs/* - including the
-          #   local refs/remotes/gitlab/* tracking refs git creates as a side
-          #   effect of the earlier push - which GitLab rejects ("deny updating a
-          #   hidden ref"). A scoped refspec only ever matches refs/heads/*, and
-          #   --prune stays within that namespace, so GitLab-managed refs
-          #   (refs/pipelines/*, refs/merge-requests/*, ...) are never touched.
+          # Sync COMPLIANT BRANCHES ONLY, and converge GitLab to match.
+          # - Only branches whose names match the definitions' workflow: rules are
+          #   pushed; non-compliant branches are never synced.
+          # - GitLab branches that are non-compliant, or no longer exist on GitHub,
+          #   are deleted so both sides converge.
+          # - Explicit refspecs are used (never `git push --mirror`/wildcard prune):
+          #   they only ever touch refs/heads/*, so local refs/remotes/gitlab/*
+          #   tracking refs and GitLab-managed refs (refs/pipelines/*, ...) are left
+          #   alone.
           # - Tags are intentionally NOT pushed: release tags originate on GitLab
-          #   (create-release-tag) and are synced GitLab -> GitHub. Pushing them
-          #   back here would reverse that direction and hit protected-tag rules.
+          #   (create-release-tag) and sync GitLab -> GitHub; pushing them back would
+          #   reverse that and hit protected-tag rules.
+          COMPLIANT_RE='^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
+
           fail() {
             echo ""
             echo "❌ ERROR: $1 failed after multiple attempts"
@@ -989,8 +993,45 @@ jobs:
             exit 1
           }
 
-          echo "Pushing branches..."
-          push_with_retry --prune --force gitlab "refs/heads/*:refs/heads/*" || fail "Branch mirror push"
+          # Local branches (this mirror clone of GitHub).
+          mapfile -t LOCAL_BRANCHES < <(git for-each-ref --format='%(refname:short)' refs/heads)
+
+          # 1) Push only compliant branches; skip (never sync) the rest.
+          push_specs=()
+          for br in "${LOCAL_BRANCHES[@]}"; do
+            if printf '%s' "$br" | grep -qE "$COMPLIANT_RE"; then
+              push_specs+=("refs/heads/${br}:refs/heads/${br}")
+            else
+              echo "  - skip non-compliant branch (not synced): $br"
+            fi
+          done
+
+          if [ "${#push_specs[@]}" -gt 0 ]; then
+            echo "Pushing ${#push_specs[@]} compliant branch(es)..."
+            push_with_retry --force gitlab "${push_specs[@]}" || fail "Compliant branch push"
+          else
+            echo "No compliant branches to push."
+          fi
+
+          # 2) Delete GitLab branches that are non-compliant, or gone from GitHub.
+          del_specs=()
+          while IFS= read -r rbr; do
+            [ -n "$rbr" ] || continue
+            if printf '%s' "$rbr" | grep -qE "$COMPLIANT_RE" \
+               && printf '%s\n' "${LOCAL_BRANCHES[@]}" | grep -qxF "$rbr"; then
+              continue   # compliant and still on GitHub -> keep
+            fi
+            echo "  - deleting GitLab branch (non-compliant or stale): $rbr"
+            del_specs+=(":refs/heads/${rbr}")
+          done < <(git ls-remote --heads gitlab | sed 's#.*refs/heads/##')
+
+          if [ "${#del_specs[@]}" -gt 0 ]; then
+            echo "Deleting ${#del_specs[@]} branch(es) from GitLab..."
+            push_with_retry gitlab "${del_specs[@]}" \
+              || echo "::warning::One or more branches could not be deleted (they may be protected)."
+          else
+            echo "No branches to delete on GitLab."
+          fi
 
           echo ""
           echo "=================================================="
