@@ -789,13 +789,24 @@ jobs:
 
             core.summary
               .addHeading("GitHub → GitLab CICD Variable Sync", 2)
-              .addRaw(`**Project ID:** \`${PROJECT_ID}\``, true)
-              .addRaw(
-                `**Candidates:** ${results.length} &nbsp;•&nbsp; ➕ ${counts.created} created` +
-                ` &nbsp;•&nbsp; ♻️ ${counts.updated} updated &nbsp;•&nbsp; ✓ ${counts.unchanged} unchanged` +
-                ` &nbsp;•&nbsp; ❌ ${counts.failed} failed`,
-                true
-              )
+              .addRaw(`<p><strong>GitLab project ID:</strong> <code>${PROJECT_ID}</code></p>`, true)
+              .addTable([
+                [
+                  { data : "Total",        header : true },
+                  { data : "➕ Created",    header : true },
+                  { data : "♻️ Updated",    header : true },
+                  { data : "✓ Unchanged",  header : true },
+                  { data : "❌ Failed",     header : true }
+                ],
+                [
+                  String(results.length),
+                  String(counts.created),
+                  String(counts.updated),
+                  String(counts.unchanged),
+                  String(counts.failed)
+                ]
+              ])
+              .addHeading("Details", 3)
               .addTable([summaryHeader, ...summaryRows]);
 
             if (counts.failed > 0) {
