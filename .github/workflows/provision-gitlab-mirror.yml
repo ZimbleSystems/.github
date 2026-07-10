@@ -436,7 +436,6 @@ jobs:
           GITLAB_HOST:      ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_ID:       ${{ steps.ensure_gitlab_project_exists.outputs.project_id }}
-          PROJECT_URL:      ${{ steps.ensure_gitlab_project_exists.outputs.project_url }}
           ALL_GH_VARS:      ${{ toJSON(vars) }}
           ALL_GH_SECRETS:   ${{ toJSON(secrets) }}
         with:
@@ -444,7 +443,6 @@ jobs:
             const GITLAB_HOST      = process.env.GITLAB_HOST;
             const GITLAB_API_TOKEN = process.env.GITLAB_API_TOKEN;
             const PROJECT_ID       = process.env.PROJECT_ID;
-            const PROJECT_URL      = process.env.PROJECT_URL;
 
             // Variables to sync are sourced from GitHub Actions variables and secrets.
             // The name follows a fixed grammar:  GL_<flags>__<name>
