@@ -931,7 +931,7 @@ jobs:
             local code="$1"
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
-                printf '\n---\n\n---\n\n'
+                printf '\n---\n\n'
                 printf '## Selected Branch — Sync & Image\n\n'
                 case "$OUTCOME" in
                   not-a-branch)
@@ -1245,7 +1245,7 @@ jobs:
 
           if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
             {
-              printf '\n---\n\n---\n\n'
+              printf '\n---\n\n'
               printf '## Mirror Repository To GitLab\n\n'
               printf '### 🔁 Branch sync summary — `%s`\n\n' "${GITHUB_REPOSITORY:-repository}"
               printf 'This run mirrored **branches** from GitHub to GitLab. Each section below is one outcome — a one-line count table plus the affected branch names (with copy buttons).\n\n'
