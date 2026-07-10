@@ -770,8 +770,8 @@ jobs:
               .sort((a, b) => (statusOrder[a.status] - statusOrder[b.status]) || a.glKey.localeCompare(b.glKey))
               .map((r) => [
                 r.source,
-                `\`${r.ghKey}\``,
-                `\`${r.glKey}\``,
+                `<code>${r.ghKey}</code>`,
+                `<code>${r.glKey}</code>`,
                 yesNo(r.masked),
                 yesNo(r.protected),
                 yesNo(r.raw),
