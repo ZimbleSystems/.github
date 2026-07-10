@@ -574,6 +574,40 @@ jobs:
               return message;
             }
 
+            // Collapsible "how to" block appended to the job summary so authors can see
+            // the naming convention and rules directly on the run. Written as HTML (with
+            // escaped angle brackets) so it renders reliably in the step summary.
+            const CONVENTION_HTML = [
+              "<details>",
+              "<summary><strong>Naming convention &amp; rules</strong> (how to create / sync variables)</summary>",
+              "",
+              "<p>Name a GitHub <em>Variable</em> or <em>Secret</em> as <code>GL_&lt;flags&gt;__&lt;name&gt;</code> and it is synced to this GitLab project. The <code>GL_&lt;flags&gt;__</code> part is stripped; the remainder becomes the GitLab key.</p>",
+              "<p><strong>Flags</strong> (letters before <code>__</code>, any order / combination):</p>",
+              "<ul>",
+              "<li><code>M</code> — masked</li>",
+              "<li><code>P</code> — protected</li>",
+              "<li><code>R</code> — raw (disables <code>$</code> expansion)</li>",
+              "<li><code>H</code> — masked <em>and</em> hidden (implies masked; value is write-only in GitLab and can only be set at creation)</li>",
+              "</ul>",
+              "<p><strong>Rules</strong></p>",
+              "<ul>",
+              "<li>No flags: use an empty block, e.g. <code>GL__NAME</code>.</li>",
+              "<li>An invalid flag block (unknown letter or duplicate) is tolerated — the variable still syncs with all flags defaulted to false.</li>",
+              "<li>The name is everything after the first <code>__</code>, taken verbatim (it may contain underscores; extra separator underscores are kept).</li>",
+              "<li>Names without the <code>GL_</code> prefix, without <code>__</code>, or with an empty name are ignored.</li>",
+              "<li>Masking is driven by the flag, not the source — a Secret without <code>M</code>/<code>H</code> syncs <strong>unmasked</strong>.</li>",
+              "</ul>",
+              "<p><strong>Masked / hidden value requirements</strong> (flags <code>M</code> and <code>H</code>): single line, at least 8 characters, no whitespace, and only Base64 characters (A-Z a-z 0-9 + / =) plus <code>@ : . ~ -</code>.</p>",
+              "<p><strong>Examples</strong></p>",
+              "<ul>",
+              "<li><code>GL__DB_HOST</code> → <code>DB_HOST</code> (no flags)</li>",
+              "<li><code>GL_M__DB_PASSWORD</code> → <code>DB_PASSWORD</code> (masked)</li>",
+              "<li><code>GL_MP__API_KEY</code> → <code>API_KEY</code> (masked + protected)</li>",
+              "<li><code>GL_H__SESSION_TOKEN</code> → <code>SESSION_TOKEN</code> (masked + hidden)</li>",
+              "</ul>",
+              "</details>"
+            ].join("\n");
+
             // Collect the variables to sync, resolving the GitLab key + flags from the name.
             // Scanning both variables and secrets keeps the flags driven purely by the name.
             const toSync = [];
@@ -594,7 +628,8 @@ jobs:
               console.log("  ℹ️ No syncable GL_ variables found - nothing to sync");
               await core.summary
                 .addHeading("GitHub → GitLab CICD Variable Sync", 2)
-                .addRaw("No GitHub variables or secrets matched the <code>GL_&lt;flags&gt;__&lt;name&gt;</code> naming convention, so there was nothing to sync.")
+                .addRaw("No GitHub variables or secrets matched the <code>GL_&lt;flags&gt;__&lt;name&gt;</code> naming convention, so there was nothing to sync.", true)
+                .addRaw(CONVENTION_HTML, true)
                 .write();
               return;
             }
@@ -763,6 +798,8 @@ jobs:
                 true
               );
             }
+
+            core.summary.addRaw(CONVENTION_HTML, true);
 
             await core.summary.write();
 
