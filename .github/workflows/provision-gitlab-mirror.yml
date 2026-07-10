@@ -574,6 +574,17 @@ jobs:
               return message;
             }
 
+            // Create or update a variable via one request, throwing a descriptive error
+            // (with masking guidance when relevant) on failure.
+            async function writeVariable(action, method, path, body) {
+              const res = await glRequest(method, path, body);
+              if (!res.ok) {
+                const wasMasked = body.masked === true || body.masked_and_hidden === true;
+                throw new Error(glWriteError(action, res, wasMasked));
+              }
+              return res;
+            }
+
             // "How to" block appended to the job summary (always, whether or not any
             // candidates were found) so authors can see the naming convention and rules
             // directly on the run. Written as HTML (with escaped angle brackets and tables)
@@ -683,10 +694,7 @@ jobs:
                   } else {
                     createBody.masked = desiredMasked;
                   }
-                  const created = await glRequest("POST", `/projects/${PROJECT_ID}/variables`, createBody);
-                  if (!created.ok) {
-                    throw new Error(glWriteError("create", created, desiredMasked));
-                  }
+                  await writeVariable("create", "POST", `/projects/${PROJECT_ID}/variables`, createBody);
                   result.status = "created";
                   console.log(`  ✓ Variable created : ${glKey}=${displayValue}`);
                 } else if (existing.ok) {
@@ -714,14 +722,11 @@ jobs:
                     if (protectedChanged) reasons.push(`protected ${existing.data.protected} -> ${isProtected}`);
                     if (rawChanged)       reasons.push(`raw ${existing.data.raw} -> ${raw}`);
                     console.log(`  → Variable differs (${reasons.join(", ")}) - updating '${glKey}'`);
-                    const updated = await glRequest("PUT", `/projects/${PROJECT_ID}/variables/${glKey}`, {
+                    await writeVariable("update", "PUT", `/projects/${PROJECT_ID}/variables/${glKey}`, {
                       value  : value,
                       ...sharedOptions,
                       masked : desiredMasked
                     });
-                    if (!updated.ok) {
-                      throw new Error(glWriteError("update", updated, desiredMasked));
-                    }
                     result.status = "updated";
                     console.log(`  ✓ Variable updated : ${glKey}=${displayValue}`);
                   }
@@ -742,40 +747,27 @@ jobs:
             // ─────────────────────────────────────────────
             // Job summary: report on every sync candidate
             // ─────────────────────────────────────────────
-            const counts = {
-              created   : results.filter((r) => r.status === "created").length,
-              updated   : results.filter((r) => r.status === "updated").length,
-              unchanged : results.filter((r) => r.status === "unchanged").length,
-              failed    : results.filter((r) => r.status === "failed").length
-            };
+            // Single source of truth for statuses: drives counting, the overview table
+            // columns, the per-row label, and the failures-first sort order.
+            const STATUS_META = [
+              { key : "failed",    label : "❌ Failed"    },
+              { key : "created",   label : "➕ Created"   },
+              { key : "updated",   label : "♻️ Updated"   },
+              { key : "unchanged", label : "✓ Unchanged" }
+            ];
+            const statusLabel = Object.fromEntries(STATUS_META.map((s) => [s.key, s.label]));
+            const statusOrder = Object.fromEntries(STATUS_META.map((s, i) => [s.key, i]));
 
-            const STATUS_LABEL = {
-              created   : "➕ created",
-              updated   : "♻️ updated",
-              unchanged : "✓ unchanged",
-              failed    : "❌ failed"
-            };
+            const counts = Object.fromEntries(STATUS_META.map((s) => [s.key, 0]));
+            for (const r of results) { counts[r.status]++; }
 
             const yesNo = (flag) => (flag ? "✓" : "—");
+            const headerCells = (labels) => labels.map((label) => ({ data : label, header : true }));
 
-            const summaryHeader = [
-              { data : "Source",      header : true },
-              { data : "GitHub name", header : true },
-              { data : "GitLab key",  header : true },
-              { data : "Masked",      header : true },
-              { data : "Protected",   header : true },
-              { data : "Raw",         header : true },
-              { data : "Hidden",      header : true },
-              { data : "Result",      header : true }
-            ];
-
-            const summaryRows = results
-              // Sort failures first, then updated/created, then unchanged - easier to scan.
+            const detailRows = results
+              // Sort by status (failures first) then by GitLab key - easier to scan.
               .slice()
-              .sort((a, b) => {
-                const order = { failed : 0, created : 1, updated : 2, unchanged : 3 };
-                return (order[a.status] - order[b.status]) || a.glKey.localeCompare(b.glKey);
-              })
+              .sort((a, b) => (statusOrder[a.status] - statusOrder[b.status]) || a.glKey.localeCompare(b.glKey))
               .map((r) => [
                 r.source,
                 `\`${r.ghKey}\``,
@@ -784,30 +776,21 @@ jobs:
                 yesNo(r.protected),
                 yesNo(r.raw),
                 yesNo(r.hidden),
-                STATUS_LABEL[r.status] || r.status
+                statusLabel[r.status] || r.status
               ]);
 
             core.summary
               .addHeading("GitHub → GitLab CICD Variable Sync", 2)
               .addRaw(`<p><strong>GitLab project ID:</strong> <code>${PROJECT_ID}</code></p>`, true)
               .addTable([
-                [
-                  { data : "Total",        header : true },
-                  { data : "➕ Created",    header : true },
-                  { data : "♻️ Updated",    header : true },
-                  { data : "✓ Unchanged",  header : true },
-                  { data : "❌ Failed",     header : true }
-                ],
-                [
-                  String(results.length),
-                  String(counts.created),
-                  String(counts.updated),
-                  String(counts.unchanged),
-                  String(counts.failed)
-                ]
+                headerCells(["Total", ...STATUS_META.map((s) => s.label)]),
+                [String(results.length), ...STATUS_META.map((s) => String(counts[s.key]))]
               ])
               .addHeading("Details", 3)
-              .addTable([summaryHeader, ...summaryRows]);
+              .addTable([
+                headerCells(["Source", "GitHub name", "GitLab key", "Masked", "Protected", "Raw", "Hidden", "Result"]),
+                ...detailRows
+              ]);
 
             if (counts.failed > 0) {
               core.summary.addHeading("Failure details", 3);
