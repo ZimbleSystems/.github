@@ -270,10 +270,33 @@ jobs:
 
               core.setOutput("project_path", project.path_with_namespace);
               core.setOutput("project_id", project.id);
+              core.setOutput("project_url", project.web_url);
+
+              await core.summary
+                .addHeading("GitLab Project", 2)
+                .addTable([
+                  [
+                    { data : "Project ID", header : true },
+                    { data : "Namespace",  header : true },
+                    { data : "Repo URL",   header : true }
+                  ],
+                  [
+                    `<code>${project.id}</code>`,
+                    `<code>${project.path_with_namespace}</code>`,
+                    `<a href="${project.web_url}">${project.web_url}</a>`
+                  ]
+                ])
+                .write();
             } catch (error) {
               core.setFailed(`\n❌ Failed to ensure GitLab project exists\n${error.message}`);
               core.setOutput("project_path", "");
               core.setOutput("project_id", "");
+              core.setOutput("project_url", "");
+
+              await core.summary
+                .addHeading("GitLab Project", 2)
+                .addRaw("<p>❌ Failed to ensure the GitLab project exists. See the step log for details.</p>", true)
+                .write();
             }
 
       # --------------------------------------------------
@@ -413,6 +436,7 @@ jobs:
           GITLAB_HOST:      ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_ID:       ${{ steps.ensure_gitlab_project_exists.outputs.project_id }}
+          PROJECT_URL:      ${{ steps.ensure_gitlab_project_exists.outputs.project_url }}
           ALL_GH_VARS:      ${{ toJSON(vars) }}
           ALL_GH_SECRETS:   ${{ toJSON(secrets) }}
         with:
@@ -420,6 +444,7 @@ jobs:
             const GITLAB_HOST      = process.env.GITLAB_HOST;
             const GITLAB_API_TOKEN = process.env.GITLAB_API_TOKEN;
             const PROJECT_ID       = process.env.PROJECT_ID;
+            const PROJECT_URL      = process.env.PROJECT_URL;
 
             // Variables to sync are sourced from GitHub Actions variables and secrets.
             // The name follows a fixed grammar:  GL_<flags>__<name>
@@ -630,6 +655,11 @@ jobs:
               "</table>"
             ].join("\n");
 
+            // Reusable "which project" line for the summary (URL + ID).
+            const PROJECT_LINE =
+              `<p><strong>GitLab project:</strong> <a href="${PROJECT_URL}">${PROJECT_URL}</a>` +
+              ` &nbsp;·&nbsp; ID <code>${PROJECT_ID}</code></p>`;
+
             // Collect the variables to sync, resolving the GitLab key + flags from the name.
             // Scanning both variables and secrets keeps the flags driven purely by the name.
             const toSync = [];
@@ -650,6 +680,7 @@ jobs:
               console.log("  ℹ️ No syncable GL_ variables found - nothing to sync");
               await core.summary
                 .addHeading("GitHub → GitLab CICD Variable Sync", 2)
+                .addRaw(PROJECT_LINE, true)
                 .addRaw("No GitHub variables or secrets matched the <code>GL_&lt;flags&gt;__&lt;name&gt;</code> naming convention, so there was nothing to sync.", true)
                 .addRaw(CONVENTION_HTML, true)
                 .write();
@@ -781,7 +812,7 @@ jobs:
 
             core.summary
               .addHeading("GitHub → GitLab CICD Variable Sync", 2)
-              .addRaw(`<p><strong>GitLab project ID:</strong> <code>${PROJECT_ID}</code></p>`, true)
+              .addRaw(PROJECT_LINE, true)
               .addTable([
                 headerCells(["Total", ...STATUS_META.map((s) => s.label)]),
                 [String(results.length), ...STATUS_META.map((s) => String(counts[s.key]))]
