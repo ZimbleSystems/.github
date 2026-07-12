@@ -672,6 +672,7 @@ jobs:
             if (toSync.length === 0) {
               console.log("  ℹ️ No syncable GL_ variables found - nothing to sync");
               await core.summary
+                .addRaw("<br><br>", true)
                 .addHeading("GitHub → GitLab CICD Variable Sync", 2)
                 .addRaw("No GitHub variables or secrets matched the <code>GL_&lt;flags&gt;__&lt;name&gt;</code> naming convention, so there was nothing to sync.", true)
                 .addRaw(CONVENTION_HTML, true)
@@ -803,6 +804,7 @@ jobs:
               ]);
 
             core.summary
+              .addRaw("<br><br>", true)
               .addHeading("GitHub → GitLab CICD Variable Sync", 2)
               .addTable([
                 headerCells(["Total", ...STATUS_META.map((s) => s.label)]),
