@@ -304,8 +304,8 @@ jobs:
       # --------------------------------------------------
       #
       # These variables are managed by this workflow and are treated as RESERVED:
-      # the variable sync step never prunes them. Keep the reserved key list here in
-      # sync with the RESERVED_KEYS constant in the 'Sync GitHub Variables' step.
+      # the variable sync step never prunes them. This step publishes the reserved key
+      # list as its 'reserved_keys' output, which the 'Sync GitHub Variables' step reads.
 
       - name: Sync Reserved GitLab CICD Variables
         id: sync_reserved_gitlab_variables
@@ -324,6 +324,12 @@ jobs:
 
             const VARIABLE_KEY   = "GH_PROJECT_REPO";
             const VARIABLE_VALUE = process.env.GH_PROJECT_REPO;
+
+            // Reserved keys managed by this step. Published (early, so it is always set
+            // when this step runs) as an output so the variable sync step knows which
+            // project variables it must never prune.
+            const RESERVED_KEYS = [VARIABLE_KEY];
+            core.setOutput("reserved_keys", JSON.stringify(RESERVED_KEYS));
 
             // GitLab CICD variable options:
             //   environment_scope = "*"     -> all environments
@@ -440,6 +446,7 @@ jobs:
           GITLAB_HOST:      ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_ID:       ${{ steps.ensure_gitlab_project_exists.outputs.project_id }}
+          RESERVED_KEYS:    ${{ steps.sync_reserved_gitlab_variables.outputs.reserved_keys }}
           ALL_GH_VARS:      ${{ toJSON(vars) }}
           ALL_GH_SECRETS:   ${{ toJSON(secrets) }}
         with:
@@ -772,9 +779,10 @@ jobs:
             // neither a current sync candidate nor reserved. Deletion is limited to
             // project-level variables: the project variables endpoint never returns
             // group-level (inherited) variables, so those are always left untouched.
-            // Reserved variables (managed by the 'Sync Reserved GitLab CICD Variables'
-            // step) are never pruned - keep this list in sync with that step.
-            const RESERVED_KEYS = new Set(["GH_PROJECT_REPO"]);
+            // Reserved variables are never pruned. The list is received from the
+            // 'Sync Reserved GitLab CICD Variables' step via its 'reserved_keys' output
+            // (a JSON array), rather than hard-coded here.
+            const RESERVED_KEYS = new Set(JSON.parse(process.env.RESERVED_KEYS || "[]"));
             const desiredKeys   = new Set(toSync.map((v) => v.glKey));
 
             async function listProjectVariables() {
