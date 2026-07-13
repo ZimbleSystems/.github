@@ -15,11 +15,84 @@
 | Reserved keys | published by the `sync_reserved_gitlab_variables` step, never pruned |
 | Stale handling | project-level variables not in the desired set are pruned |
 
-This plan resolves the ⚠️ / ❌ transitions surfaced in the use-case analysis. Phases are ordered so that cheap, foundational, and safety work lands before the heavier hidden-variable work.
+This plan resolves the ⚠️ / ❌ transitions surfaced in the use-case matrix (§2). Phases are ordered so that cheap, foundational, and safety work lands before the heavier hidden-variable work.
 
 ---
 
-## 2. Phase overview
+## 2. Use case matrix
+
+How every value and flag transition behaves against the **current** implementation (before this plan is applied).
+
+**Legend:** ✅ works cleanly · ⚠️ works but churns / degenerate · ❌ fails or needs enhancement.
+Flags live in the GitHub variable name, so "editing flags" = renaming the GitHub variable; the resolved GitLab key decides update vs. new key.
+
+### 2.1 Creation — key not yet in GitLab
+
+| # | Scenario | Example (GitHub → GitLab key) | Current behavior | Status |
+|----|----------|-------------------------------|------------------|:------:|
+| C1 | Visible, no flags | `GL__DB_HOST` → `DB_HOST` | POST `masked:false, raw:true` | ✅ |
+| C2 | Masked, valid value | `GL_M__TOKEN`=`Abcd1234` → `TOKEN` | POST `masked:true, raw:true` | ✅ |
+| C3 | Masked, invalid value (<8 / space / multiline) | `GL_M__TOKEN`=`ab c` | POST → masking error | ❌ |
+| C4 | Protected | `GL_P__X` | POST `protected:true` | ✅ |
+| C5 | Expanded | `GL_E__X`=`$OTHER` | POST `raw:false` | ✅ |
+| C6 | Hidden, valid value | `GL_H__TOKEN`=`Abcd1234` | POST `masked_and_hidden:true, raw:true` | ✅ |
+| C7 | Masked **+** expanded | `GL_ME__X` | POST `masked:true, raw:false` → charset-restricted | ⚠️/❌ |
+| C8 | Hidden **+** expanded | `GL_HE__X` | POST `masked_and_hidden:true, raw:false` → contradiction | ⚠️/❌ |
+
+### 2.2 Value transitions — flags unchanged, key exists
+
+| # | Scenario | Example | Current behavior | Status |
+|----|----------|---------|------------------|:------:|
+| V1 | Value unchanged (visible/masked) | `DB_HOST` same value | compares stored value → unchanged, no write | ✅ |
+| V2 | Value changed (visible) | `DB_HOST`: `a`→`b` | `valueChanged` → PUT | ✅ |
+| V3 | Value changed (masked, valid) | `TOKEN`: `Abcd1234`→`Wxyz9876` | PUT new value | ✅ |
+| V4 | Value changed (masked, invalid new value) | `TOKEN`→`ab c` | PUT → masking error | ❌ |
+| V5 | Value unchanged (**hidden**) | `TOKEN` (hidden) same value | `valueChanged=true` forced → PUT every run | ⚠️ |
+| V6 | Value changed (**hidden**, rotation) | `TOKEN` (hidden) rotated | can't read old → PUT new value every run | ⚠️ |
+
+### 2.3 Flag transitions — value unchanged, key exists
+
+| # | Transition | Example (rename) | Current behavior | Status |
+|----|-----------|------------------|------------------|:------:|
+| F1 | add masked | `GL__X`→`GL_M__X` | PUT `masked:true`; ok if value valid | ✅/❌ |
+| F2 | remove masked | `GL_M__X`→`GL__X` | PUT `masked:false` | ✅ |
+| F3 | add protected | `GL__X`→`GL_P__X` | PUT `protected:true` | ✅ |
+| F4 | remove protected | `GL_P__X`→`GL__X` | PUT `protected:false` | ✅ |
+| F5 | enable expansion (plain) | `GL__X`→`GL_E__X` | PUT `raw:false` | ✅ |
+| F6 | disable expansion (plain) | `GL_E__X`→`GL__X` | PUT `raw:true` | ✅ |
+| F7 | add expansion to masked | `GL_M__X`→`GL_ME__X` | PUT `masked:true, raw:false` → charset-restricted | ⚠️/❌ |
+| F8 | **add hidden** | `GL_M__X`→`GL_H__X` | `isHiddenNow≠hidden` → **throws**, fails every run | ❌ |
+| F9 | **remove hidden** | `GL_H__X`→`GL_M__X` | throws (can't un-hide), fails every run | ❌ |
+| F10 | change protected/expansion **on** a hidden var | `GL_H__X`→`GL_HP__X` | hidden unchanged → PUT `protected:true` (+ value refresh) | ⚠️ |
+| F11 | multiple flags at once | `GL__X`→`GL_MP__X` | detects each change → single PUT | ✅ |
+
+### 2.4 Name changes, collisions, removal
+
+| # | Scenario | Example | Current behavior | Status |
+|----|----------|---------|------------------|:------:|
+| N1 | rename the **name** part | `GL__FOO`→`GL__BAR` | `FOO` pruned; `BAR` created | ✅ |
+| N2 | rename name **and** flags | `GL__FOO`→`GL_M__BAR` | prune `FOO` + create masked `BAR` | ✅ |
+| N3 | GitHub var deleted | remove `GL__FOO` | `FOO` stale → pruned (unless reserved) | ✅ |
+| N4 | same key from **variable + secret** | `GL__FOO` (var) + `GL_M__FOO` (secret) | both processed, secret wins, flip-flop each run; hidden mismatch → persistent fail | ❌ |
+| N5 | reserved key | `GH_PROJECT_REPO` | never pruned (reserved step output) | ✅ |
+| N6 | group-level var, same key | inherited `FOO` | untouched (project endpoint only) | ✅ |
+
+### 2.5 Items needing work
+
+| Use cases | Addressed by |
+|-----------|--------------|
+| C7, C8, F7 | Phase 1 |
+| N4 | Phase 2 |
+| C3, V4, F1 | Phase 3 |
+| F8, F9 | Phase 4 |
+| V5, V6 | Phase 5 |
+| multiline/space secrets, secrets→hidden default | Phase 6 (parked) |
+
+Everything else already behaves correctly.
+
+---
+
+## 3. Phase overview
 
 | Phase | Enhancement | Use cases | Effort | Risk | Depends on |
 |:-----:|-------------|-----------|:------:|:----:|:----------:|
@@ -34,7 +107,7 @@ Effort: **S** ≈ small · **M** ≈ medium.
 
 ---
 
-## 3. Phases
+## 4. Phases
 
 ### Phase 1 — Ignore `E` on masked/hidden variables
 
@@ -161,7 +234,7 @@ Hidden values can't be read back, so change can't be detected → we re-push eve
 
 ---
 
-## 4. Ordering rationale
+## 5. Ordering rationale
 
 1. **Phase 1** — foundational and cheap; unblocks correct masked/hidden behavior.
 2. **Phase 2** — independent; stops churn/failures from collisions.
