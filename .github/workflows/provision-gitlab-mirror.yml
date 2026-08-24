@@ -24,7 +24,15 @@ jobs:
 
     env:
       # Compliant branch names (must match the definitions' workflow: rules).
-      # Shared by the auto-build and mirror-push steps.
+      # This is the DEFAULT/BASE shape only. The EFFECTIVE pattern - which may
+      # be relaxed per repo by IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME
+      # - is resolved once, in real JS (not a YAML/expression ternary), by the
+      # 'Resolve Compliant Branch Regex' step below. Every consumer (the
+      # mirror/sync bash steps AND 'Enforce Branch Naming Policy') reads that
+      # step's `value` output explicitly, not this raw env var directly, so
+      # they can never drift apart. This job-level default remains only as
+      # the base shape that step starts from, and as a safety-net fallback
+      # value in this env block itself.
       COMPLIANT_BRANCH_REGEX: '^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
 
     steps:
@@ -84,7 +92,70 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 2: Generate GitHub App Token
+      # Step 2: Resolve Compliant Branch Regex
+      # --------------------------------------------------
+      #
+      # Computes the EFFECTIVE compliant-branch-name pattern used by every
+      # later consumer: the mirror/sync bash steps ('Sync Selected Branch' and
+      # 'Mirror Repository To GitLab' - what actually gets pushed GitHub ->
+      # GitLab) and 'Enforce Branch Naming Policy' (what GitLab's own push
+      # rule allows). Doing this once, here, in real JS keeps all three in
+      # lockstep and avoids relying on GitHub Actions expression `&&`/`||`
+      # value-return semantics inside a job-level `env:` block - those are
+      # not precisely documented, so this step uses the same tested
+      # trim/lowercase 'true' check used elsewhere in this workflow instead.
+      #
+      # IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME (repo/org Actions
+      # variable - repo overrides org): when 'true', the release-branch
+      # alternative relaxes from the numeric 'release/vX.Y' shape to
+      # 'release/v-<any word(s)>' - still requiring the 'v' prefix, just not
+      # a version number after it. Missing or anything other than 'true'
+      # keeps the numeric default (COMPLIANT_BRANCH_REGEX, the job-level env
+      # above, unchanged).
+
+      - name: Resolve Compliant Branch Regex
+        id: resolve_compliant_branch_regex
+        uses: actions/github-script@v9
+        env:
+          COMPLIANT_BRANCH_REGEX: ${{ env.COMPLIANT_BRANCH_REGEX }}
+          IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME: ${{ vars.IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME }}
+        with:
+          script: |
+            // The release-branch alternative as it appears verbatim inside
+            // COMPLIANT_BRANCH_REGEX. Swapped for 'release/v-<any word(s)>'
+            // (the numeric 'vX.Y' after 'v' replaced by a literal '-' plus
+            // free-form text) when the opt-out below is 'true' - the 'v'
+            // prefix is still required, only the version-number shape after
+            // it is relaxed.
+            const DEFAULT_RELEASE_SEGMENT = "release/v[0-9]+\\.[0-9]+";
+            const RELAXED_RELEASE_SEGMENT = "release/v-.*";
+
+            function isTrue(value) {
+              return typeof value === "string" && value.trim().toLowerCase() === "true";
+            }
+
+            const baseRegex = process.env.COMPLIANT_BRANCH_REGEX;
+            const ignoreVersionNumerical = isTrue(process.env.IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME);
+
+            console.log("");
+            console.log("ℹ️ Resolving the effective compliant-branch-name pattern...");
+            console.log("------------------------------------");
+
+            let effectiveRegex = baseRegex;
+
+            if (!ignoreVersionNumerical) {
+              console.log(`  ✓ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' is not 'true' - using the default pattern: '${baseRegex}'`);
+            } else if (baseRegex.includes(DEFAULT_RELEASE_SEGMENT)) {
+              effectiveRegex = baseRegex.replace(DEFAULT_RELEASE_SEGMENT, RELAXED_RELEASE_SEGMENT);
+              console.log(`  ⚠️ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' = 'true' - relaxing the release-branch shape to '${RELAXED_RELEASE_SEGMENT}': '${effectiveRegex}'`);
+            } else {
+              console.log(`  ⚠️ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' = 'true' but the expected release segment ('${DEFAULT_RELEASE_SEGMENT}') was not found in COMPLIANT_BRANCH_REGEX - using it unmodified: '${baseRegex}'. Check COMPLIANT_BRANCH_REGEX in this workflow's job-level env for drift.`);
+            }
+
+            core.setOutput("value", effectiveRegex);
+
+      # --------------------------------------------------
+      # Step 3: Generate GitHub App Token
       # --------------------------------------------------
       #
       # Moved up front (this used to run right before 'Prepare Mirror Clone')
@@ -113,7 +184,7 @@ jobs:
           owner:       ${{ github.repository_owner }}
 
       # --------------------------------------------------
-      # Step 3: Validate And Extract Repository Metadata
+      # Step 4: Validate And Extract Repository Metadata
       # --------------------------------------------------
 
       - name: Validate Repository Metadata
@@ -173,7 +244,7 @@ jobs:
             core.setOutput("tenant", process.env.TENANT || "");
 
       # --------------------------------------------------
-      # Step 4: Ensure GitLab Project Exists
+      # Step 5: Ensure GitLab Project Exists
       # --------------------------------------------------
 
       - name: Ensure GitLab Project Exists
@@ -443,7 +514,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 5: Configure Default Branch
+      # Step 6: Configure Default Branch
       # --------------------------------------------------
       #
       # 'main' is set as the default branch:
@@ -550,7 +621,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 6: Enforce Branch Naming Policy
+      # Step 7: Enforce Branch Naming Policy
       # --------------------------------------------------
       #
       # Restricts branch creation on GitLab to the same compliant names this
@@ -559,6 +630,12 @@ jobs:
       # the API responds 403, which is logged as a warning (not a failure) so
       # provisioning still completes - branch naming is still enforced
       # client-side by this workflow's own mirror logic either way.
+      #
+      # The regex used here is the EFFECTIVE one resolved by the
+      # 'Resolve Compliant Branch Regex' step (Step 2) above - which already
+      # accounts for IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME if it is
+      # set - so what this pushes to GitLab and what the mirror/sync steps
+      # actually push to GitLab can never drift apart.
 
       - name: Enforce Branch Naming Policy
         id: enforce_branch_naming_policy
@@ -568,12 +645,12 @@ jobs:
           GITLAB_HOST:            ${{ secrets.GITLAB_HOST || vars.GITLAB_HOST }}
           GITLAB_API_TOKEN:       ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_ID:             ${{ steps.ensure_gitlab_project_exists.outputs.project_id }}
-          COMPLIANT_BRANCH_REGEX: ${{ env.COMPLIANT_BRANCH_REGEX }}
+          COMPLIANT_BRANCH_REGEX: ${{ steps.resolve_compliant_branch_regex.outputs.value }}
         with:
           script: |
-            const GITLAB_HOST       = process.env.GITLAB_HOST;
-            const GITLAB_API_TOKEN  = process.env.GITLAB_API_TOKEN;
-            const PROJECT_ID        = process.env.PROJECT_ID;
+            const GITLAB_HOST      = process.env.GITLAB_HOST;
+            const GITLAB_API_TOKEN = process.env.GITLAB_API_TOKEN;
+            const PROJECT_ID       = process.env.PROJECT_ID;
             const BRANCH_NAME_REGEX = process.env.COMPLIANT_BRANCH_REGEX;
 
             async function glRequest(method, path, body) {
@@ -653,7 +730,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 7: Detect Force-Push Protection Skip Flags
+      # Step 8: Detect Force-Push Protection Skip Flags
       # --------------------------------------------------
       #
       # Org-wide kill switch, with a per-repo/per-branch opt-in underneath it:
@@ -755,7 +832,7 @@ jobs:
             core.setOutput("skip_release", skipRelease ? "true" : "false");
 
       # --------------------------------------------------
-      # Step 8: Protect main & Release Branches
+      # Step 9: Protect main & Release Branches
       # --------------------------------------------------
       #
       # 'main' and release branches (release/vX.Y, matched here via the wildcard
@@ -935,7 +1012,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 9: Protect Version Tags
+      # Step 10: Protect Version Tags
       # --------------------------------------------------
       #
       # Tags matching v<major>.<minor>.<patch> are protected at the Maintainer
@@ -1044,7 +1121,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 10: Sync Reserved GitLab CICD Variables
+      # Step 11: Sync Reserved GitLab CICD Variables
       # --------------------------------------------------
       #
       # These variables are managed by this workflow and are treated as RESERVED:
@@ -1185,7 +1262,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 11: Sync GitHub Variables To GitLab CICD
+      # Step 12: Sync GitHub Variables To GitLab CICD
       # --------------------------------------------------
 
       - name: Sync GitHub Variables To GitLab CICD
@@ -1686,7 +1763,7 @@ jobs:
             }
 
       # --------------------------------------------------
-      # Step 12: Prepare Mirror Clone
+      # Step 13: Prepare Mirror Clone
       # --------------------------------------------------
       # Bare mirror clone of the GitHub repo + the GitLab remote. Shared by the
       # (optional) auto-build step and the full mirror push that follow. The
@@ -1723,7 +1800,7 @@ jobs:
           git remote add gitlab "$GITLAB_URL"
 
       # --------------------------------------------------
-      # Step 13: Sync Selected Branch & Report Image
+      # Step 14: Sync Selected Branch & Report Image
       # --------------------------------------------------
       # Owns the DISPATCHED branch: pushes it to GitLab (fast-forward by default,
       # --force only when force_push is ticked) so its pipeline is created. The
@@ -1740,6 +1817,7 @@ jobs:
           GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN || vars.GITLAB_API_TOKEN }}
           PROJECT_ID:       ${{ steps.ensure_gitlab_project_exists.outputs.project_id }}
           FORCE_PUSH:       ${{ inputs.force_push }}
+          COMPLIANT_BRANCH_REGEX: ${{ steps.resolve_compliant_branch_regex.outputs.value }}
           # Centralized definitions that produce a container image (space-separated).
           CONTAINER_BUILD_DEFINITIONS: "quarkus-maven-native-app spring-maven-native-app"
         run: |
@@ -1940,12 +2018,14 @@ jobs:
           OUTCOME="success"; finish 0
 
       # --------------------------------------------------
-      # Step 14: Mirror Repository To GitLab
+      # Step 15: Mirror Repository To GitLab
       # --------------------------------------------------
 
       - name: Mirror Repository To GitLab
         id: execute_gitlab_mirror_push
         if: ${{ steps.ensure_gitlab_project_exists.outputs.project_path != '' }}
+        env:
+          COMPLIANT_BRANCH_REGEX: ${{ steps.resolve_compliant_branch_regex.outputs.value }}
         run: |
           set -euo pipefail
           cd repo.git
