@@ -25,14 +25,15 @@ jobs:
     env:
       # Compliant branch names (must match the definitions' workflow: rules).
       # This is the DEFAULT/BASE shape only. The EFFECTIVE pattern - which may
-      # be relaxed per repo by IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME
-      # - is resolved once, in real JS (not a YAML/expression ternary), by the
-      # 'Resolve Compliant Branch Regex' step below. Every consumer (the
-      # mirror/sync bash steps AND 'Enforce Branch Naming Policy') reads that
-      # step's `value` output explicitly, not this raw env var directly, so
-      # they can never drift apart. This job-level default remains only as
-      # the base shape that step starts from, and as a safety-net fallback
-      # value in this env block itself.
+      # gain an additional release-branch alternative per repo via
+      # IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME - is resolved once, in
+      # real JS (not a YAML/expression ternary), by the 'Resolve Compliant
+      # Branch Regex' step below. Every consumer (the mirror/sync bash steps
+      # AND 'Enforce Branch Naming Policy') reads that step's `value` output
+      # explicitly, not this raw env var directly, so they can never drift
+      # apart. This job-level default remains only as the base shape that
+      # step starts from, and as a safety-net fallback value in this env
+      # block itself.
       COMPLIANT_BRANCH_REGEX: '^(feature/.*|fix/.*|chore/.*|hotfix/v[0-9]+\.[0-9]+\.[0-9]+|release/v[0-9]+\.[0-9]+|main)$'
 
     steps:
@@ -106,12 +107,14 @@ jobs:
       # trim/lowercase 'true' check used elsewhere in this workflow instead.
       #
       # IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME (repo/org Actions
-      # variable - repo overrides org): when 'true', the release-branch
-      # alternative relaxes from the numeric 'release/vX.Y' shape to
-      # 'release/v-<any word(s)>' - still requiring the 'v' prefix, just not
-      # a version number after it. Missing or anything other than 'true'
-      # keeps the numeric default (COMPLIANT_BRANCH_REGEX, the job-level env
-      # above, unchanged).
+      # variable - repo overrides org): when 'true', the free-form
+      # 'release/v-<any word(s)>' shape is ADDED as an additional alternative
+      # alongside the numeric 'release/vX.Y' shape - it does NOT replace it,
+      # so numeric release branches (release/v1.2) keep working exactly as
+      # before, and long-lived per-product-line branches like
+      # release/v-switching or release/v-pos-management are ALSO accepted.
+      # Missing or anything other than 'true' keeps just the numeric default
+      # (COMPLIANT_BRANCH_REGEX, the job-level env above, unchanged).
 
       - name: Resolve Compliant Branch Regex
         id: resolve_compliant_branch_regex
@@ -122,13 +125,12 @@ jobs:
         with:
           script: |
             // The release-branch alternative as it appears verbatim inside
-            // COMPLIANT_BRANCH_REGEX. Swapped for 'release/v-<any word(s)>'
-            // (the numeric 'vX.Y' after 'v' replaced by a literal '-' plus
-            // free-form text) when the opt-out below is 'true' - the 'v'
-            // prefix is still required, only the version-number shape after
-            // it is relaxed.
+            // COMPLIANT_BRANCH_REGEX. When the opt-out below is 'true', the
+            // free-form 'release/v-<any word(s)>' shape is APPENDED right
+            // next to it (as an additional '|'-separated alternative), not
+            // substituted in its place - so both shapes are accepted at once.
             const DEFAULT_RELEASE_SEGMENT = "release/v[0-9]+\\.[0-9]+";
-            const RELAXED_RELEASE_SEGMENT = "release/v-.*";
+            const ADDITIONAL_RELEASE_SEGMENT = "release/v-.*";
 
             function isTrue(value) {
               return typeof value === "string" && value.trim().toLowerCase() === "true";
@@ -146,8 +148,8 @@ jobs:
             if (!ignoreVersionNumerical) {
               console.log(`  ✓ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' is not 'true' - using the default pattern: '${baseRegex}'`);
             } else if (baseRegex.includes(DEFAULT_RELEASE_SEGMENT)) {
-              effectiveRegex = baseRegex.replace(DEFAULT_RELEASE_SEGMENT, RELAXED_RELEASE_SEGMENT);
-              console.log(`  ⚠️ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' = 'true' - relaxing the release-branch shape to '${RELAXED_RELEASE_SEGMENT}': '${effectiveRegex}'`);
+              effectiveRegex = baseRegex.replace(DEFAULT_RELEASE_SEGMENT, `${DEFAULT_RELEASE_SEGMENT}|${ADDITIONAL_RELEASE_SEGMENT}`);
+              console.log(`  ⚠️ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' = 'true' - appending '${ADDITIONAL_RELEASE_SEGMENT}' alongside the numeric shape: '${effectiveRegex}'`);
             } else {
               console.log(`  ⚠️ 'IGNORE_VERSION_NUMERICAL_IN_RELEASE_BRANCH_NAME' = 'true' but the expected release segment ('${DEFAULT_RELEASE_SEGMENT}') was not found in COMPLIANT_BRANCH_REGEX - using it unmodified: '${baseRegex}'. Check COMPLIANT_BRANCH_REGEX in this workflow's job-level env for drift.`);
             }
