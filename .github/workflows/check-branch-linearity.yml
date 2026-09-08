@@ -1,0 +1,601 @@
+name: Check Branch & Tag History Linearity
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "bulk = every eligible repo in the org, selective = only the repos listed below"
+        required: true
+        default: "bulk"
+        type: choice
+        options:
+          - bulk
+          - selective
+
+      target_repos:
+        description: "Comma-separated repo names (only used when mode = selective)"
+        required: false
+
+      include_archived:
+        description: "Also scan archived repositories"
+        required: true
+        default: false
+        type: boolean
+
+      include_forks:
+        description: "Also scan forked repositories"
+        required: true
+        default: false
+        type: boolean
+
+      batch_size:
+        description: "Repos per scan job — higher means fewer/bigger jobs, lower means more parallelism"
+        required: true
+        default: "5"
+
+# Only one scan at a time — a re-dispatch supersedes whatever is already
+# running instead of doubling up on compute.
+concurrency:
+  group: check-branch-linearity
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Governance constants, defined once at the workflow level so the scan job
+# and the report job both read the exact same patterns — never two copies
+# that could drift apart.
+#   PROTECTED_BRANCH_REGEX : main, and any release/* branch. A non-linear
+#                            history on one of these is a policy violation
+#                            and gets highlighted, not just reported.
+#   TAG_PATTERN_REGEX      : semver release tags (vMAJOR.MINOR.PATCH, e.g.
+#                            v1.2.3). Bash's POSIX ERE has no \d, so \d is
+#                            written as [0-9] — same pattern, portable regex.
+env:
+  PROTECTED_BRANCH_REGEX: '^(main|release/.*)$'
+  TAG_PATTERN_REGEX:      '^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+jobs:
+
+  # ====================================================
+  # Job 1: discover eligible repos, split into batches
+  # ====================================================
+  discover_repositories:
+    name: Discover And Batch Repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.build_scan_matrix.outputs.matrix }}
+      total:  ${{ steps.build_scan_matrix.outputs.total }}
+
+    steps:
+
+      # --------------------------------------------------
+      # Step 1: Generate GitHub App Token
+      # --------------------------------------------------
+
+      - name: Generate GitHub App Token
+        id: generate_github_app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id:   ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+          owner:       ${{ github.repository_owner }}
+
+      # --------------------------------------------------
+      # Step 2: Compute Target Repositories
+      # --------------------------------------------------
+      # bulk: every repo in the org, filtered to what's actually scannable
+      # (forks/archived/disabled/empty repos are skipped unless asked
+      # otherwise). selective: validates the comma-separated list against the
+      # same eligibility gate, so both modes feed the next step an
+      # identically-shaped repo list — one code path, not two.
+
+      - name: Compute Target Repositories
+        id: compute_target_repos
+        uses: actions/github-script@v9
+        env:
+          MODE:             ${{ inputs.mode }}
+          TARGET_REPOS:     ${{ inputs.target_repos }}
+          INCLUDE_ARCHIVED: ${{ inputs.include_archived }}
+          INCLUDE_FORKS:    ${{ inputs.include_forks }}
+        with:
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
+          script: |
+            const org              = context.repo.owner;
+            const mode             = process.env.MODE;
+            const targetReposInput = process.env.TARGET_REPOS;
+            const includeArchived  = process.env.INCLUDE_ARCHIVED === "true";
+            const includeForks     = process.env.INCLUDE_FORKS === "true";
+
+            core.info(`Mode             : ${mode}`);
+            core.info(`Include archived : ${includeArchived}`);
+            core.info(`Include forks    : ${includeForks}`);
+
+            if (mode === "selective" && (!targetReposInput || targetReposInput.trim() === "")) {
+              core.setFailed("target_repos must be provided in selective mode");
+              return;
+            }
+
+            // Single eligibility gate shared by both modes (DRY). A repo with
+            // no commits can't be cloned, a disabled repo can't be reached,
+            // and forks/archived repos are opt-in since they rarely need
+            // governance checks.
+            function isEligible(repo) {
+              if (repo.disabled) return false;
+              if (repo.size === 0) return false;
+              if (!includeArchived && repo.archived) return false;
+              if (!includeForks && repo.fork) return false;
+              return true;
+            }
+
+            function toTarget(repo) {
+              return {
+                name:          repo.name,
+                htmlUrl:       repo.html_url,
+                private:       repo.private,
+                defaultBranch: repo.default_branch,
+              };
+            }
+
+            let repos = [];
+
+            if (mode === "bulk") {
+              core.info("Fetching all repositories in the organization...");
+
+              const allRepos = await github.paginate(
+                github.rest.repos.listForOrg,
+                { org, per_page: 100, sort: "full_name", direction: "asc", type: "all" }
+              );
+
+              repos = allRepos.filter(isEligible).map(toTarget);
+
+              core.info(`Eligible repos : ${repos.length} (of ${allRepos.length} total)`);
+
+              if (repos.length === 0) {
+                core.setFailed("No eligible repositories found in organization");
+                return;
+              }
+            } else {
+              core.info("Validating provided repositories...");
+
+              const inputRepos = targetReposInput
+                .split(",")
+                .map(r => r.trim())
+                .filter(Boolean);
+
+              if (inputRepos.length === 0) {
+                core.setFailed("No valid repositories resolved from input");
+                return;
+              }
+
+              const validRepos = [];
+              const skipped     = [];
+
+              for (const repo of inputRepos) {
+                try {
+                  const { data } = await github.rest.repos.get({ owner: org, repo });
+
+                  if (!isEligible(data)) {
+                    core.warning(`Skipping ineligible repo : ${repo} (archived/fork/disabled/empty)`);
+                    skipped.push(repo);
+                    continue;
+                  }
+
+                  validRepos.push(toTarget(data));
+                } catch (err) {
+                  core.warning(`Invalid or inaccessible repo : ${repo}`);
+                  skipped.push(repo);
+                }
+              }
+
+              if (validRepos.length === 0) {
+                core.setFailed("No valid repositories found from input");
+                return;
+              }
+
+              if (skipped.length > 0) {
+                core.warning(`Skipped repos : ${skipped.join(", ")}`);
+              }
+
+              repos = validRepos;
+            }
+
+            core.info(`Final repos to scan (${repos.length}) : ${repos.map(r => r.name).join(", ")}`);
+            core.setOutput("repos", JSON.stringify(repos));
+
+      # --------------------------------------------------
+      # Step 3: Build Scan Matrix
+      # --------------------------------------------------
+      # Chunks the repo list into fixed-size batches so the next job fans out
+      # as one Actions job per BATCH instead of one per repo — bounded
+      # parallelism and far less per-job runner startup overhead, for the
+      # same total scanning work.
+
+      - name: Build Scan Matrix
+        id: build_scan_matrix
+        uses: actions/github-script@v9
+        env:
+          REPOS:      ${{ steps.compute_target_repos.outputs.repos }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        with:
+          script: |
+            const repos     = JSON.parse(process.env.REPOS || "[]");
+            const batchSize = Math.max(1, parseInt(process.env.BATCH_SIZE, 10) || 5);
+
+            const matrix = [];
+            for (let i = 0; i < repos.length; i += batchSize) {
+              matrix.push(repos.slice(i, i + batchSize));
+            }
+
+            core.info(`Total repos   : ${repos.length}`);
+            core.info(`Batch size    : ${batchSize}`);
+            core.info(`Total batches : ${matrix.length}`);
+
+            core.setOutput("matrix", JSON.stringify(matrix));
+            core.setOutput("total", String(repos.length));
+
+  # ====================================================
+  # Job 2: scan each batch for merge commits / linearity
+  # (branches and matching tags alike)
+  # ====================================================
+  scan_repositories:
+    name: Scan Batch For Branch & Tag Linearity
+    needs: discover_repositories
+    if: success() && needs.discover_repositories.outputs.total != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.discover_repositories.outputs.matrix) }}
+
+    steps:
+
+      # --------------------------------------------------
+      # Step 1: Generate GitHub App Token
+      # --------------------------------------------------
+
+      - name: Generate GitHub App Token
+        id: generate_github_app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id:   ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+          owner:       ${{ github.repository_owner }}
+
+      # --------------------------------------------------
+      # Step 2: Scan Batch For Branch & Tag Linearity
+      # --------------------------------------------------
+      # Bare clone with `--filter=blob:none` (a "blobless" partial clone):
+      # every commit and tree object comes across, but no file content.
+      # Trees are tiny (filenames + SHAs); blobs are where the real weight
+      # lives (source, binaries, build artifacts) and this skips them
+      # entirely. That's everything `git rev-list --min-parents=2` needs to
+      # find merge commits, at a fraction of a full clone's transfer size —
+      # GitHub's Git servers support this filter over HTTPS. One clone per
+      # repo (not per branch/tag) since `--bare` already brings every ref,
+      # so shared history is never fetched twice. Every branch is analyzed
+      # (no cap) — tags are filtered to TAG_PATTERN_REGEX first, since most
+      # tags in a repo are never release tags.
+
+      - name: Scan Batch For Branch & Tag Linearity
+        id: scan_batch
+        env:
+          ORG:                     ${{ github.repository_owner }}
+          TOKEN:                   ${{ steps.generate_github_app_token.outputs.token }}
+          BATCH:                   ${{ toJson(matrix.batch) }}
+          PROTECTED_BRANCH_REGEX:  ${{ env.PROTECTED_BRANCH_REGEX }}
+          TAG_PATTERN_REGEX:       ${{ env.TAG_PATTERN_REGEX }}
+        run: |
+          set -euo pipefail
+
+          echo "$BATCH" | jq -c '.[]' > repos.jsonl
+          : > results.jsonl
+
+          # ------------------------------------------------------------------
+          # analyze_ref <ref> -> {hasLinearHistory, mergeCount, mergeCommits}
+          # Shared by branches and tags below so the actual linearity check
+          # (and the merge-commit list it returns) lives in exactly one place.
+          # ------------------------------------------------------------------
+          analyze_ref() {
+            local ref="$1"
+            local merge_count is_linear merge_commits
+
+            merge_count=$(git rev-list --min-parents=2 --count "$ref")
+            is_linear="true"
+            [ "$merge_count" -gt 0 ] && is_linear="false"
+
+            # Capped to the 10 most recent merge commits per ref — a ref with
+            # hundreds of merges only needs enough evidence to prove it's
+            # non-linear, not an exhaustive dump. mergeCount (uncapped) still
+            # carries the true total for a "+N more" note in the report.
+            merge_commits="[]"
+            if [ "$merge_count" -gt 0 ]; then
+              merge_commits=$(git log --merges --format='%H|%h' "$ref" | head -n 10 | jq -R -s -c --arg url "$html_url" '
+                split("\n") | map(select(length > 0)) | map(split("|")) |
+                map({sha: .[1], url: ($url + "/commit/" + .[0])})
+              ')
+            fi
+
+            jq -c -n \
+              --argjson linear "$is_linear" \
+              --argjson mergeCount "$merge_count" \
+              --argjson mergeCommits "$merge_commits" \
+              '{hasLinearHistory: $linear, mergeCount: $mergeCount, mergeCommits: $mergeCommits}'
+          }
+
+          while IFS= read -r repo_json; do
+            name=$(echo "$repo_json" | jq -r '.name')
+            html_url=$(echo "$repo_json" | jq -r '.htmlUrl')
+
+            echo ""
+            echo "=================================================="
+            echo "🔍 Scanning ${name}"
+            echo "=================================================="
+
+            workdir="clone-${name//\//_}"
+            rm -rf "$workdir"
+
+            if ! git clone --bare --filter=blob:none --quiet \
+                "https://x-access-token:${TOKEN}@github.com/${ORG}/${name}.git" "$workdir" 2>clone-error.log; then
+              err=$(tr '\n' ' ' < clone-error.log | sed 's/"/\\"/g' | cut -c1-300)
+              echo "❌ Clone failed for ${name}: ${err}"
+              jq -n --arg repo "$name" --arg url "$html_url" --arg err "$err" \
+                '{repo: $repo, htmlUrl: $url, error: $err, branches: [], tags: []}' >> results.jsonl
+              rm -rf "$workdir" clone-error.log
+              continue
+            fi
+            rm -f clone-error.log
+
+            pushd "$workdir" > /dev/null
+
+            # ---- branches: every branch, none skipped ----
+            branch_results="[]"
+            branches=$(git for-each-ref --format='%(refname:short)' refs/heads/ | sort || true)
+
+            while IFS= read -r branch; do
+              [ -z "$branch" ] && continue
+
+              is_protected="false"
+              [[ "$branch" =~ $PROTECTED_BRANCH_REGEX ]] && is_protected="true"
+
+              stats=$(analyze_ref "$branch")
+
+              branch_results=$(echo "$branch_results" | jq -c \
+                --arg branch "$branch" --argjson protected "$is_protected" --argjson stats "$stats" \
+                '. + [$stats + {branch: $branch, protected: $protected}]')
+            done <<< "$branches"
+
+            # ---- tags: only those matching TAG_PATTERN_REGEX (semver releases) ----
+            tag_results="[]"
+            all_tags=$(git for-each-ref --format='%(refname:short)' refs/tags/ | sort || true)
+
+            while IFS= read -r tag; do
+              [ -z "$tag" ] && continue
+              [[ "$tag" =~ $TAG_PATTERN_REGEX ]] || continue
+
+              stats=$(analyze_ref "$tag")
+
+              tag_results=$(echo "$tag_results" | jq -c \
+                --arg tag "$tag" --argjson stats "$stats" \
+                '. + [$stats + {tag: $tag}]')
+            done <<< "$all_tags"
+
+            popd > /dev/null
+            rm -rf "$workdir"
+
+            jq -n --arg repo "$name" --arg url "$html_url" \
+                  --argjson branches "$branch_results" --argjson tags "$tag_results" \
+                  '{repo: $repo, htmlUrl: $url, branches: $branches, tags: $tags}' \
+                  >> results.jsonl
+
+            branch_count=$(echo "$branch_results" | jq 'length')
+            tag_count=$(echo "$tag_results" | jq 'length')
+            echo "✅ Done: ${name} (${branch_count} branch(es), ${tag_count} matching tag(s))"
+
+          done < repos.jsonl
+
+          jq -s '.' results.jsonl > results.json
+          echo "ℹ️ Batch complete. Repos processed: $(jq 'length' results.json)"
+
+      # --------------------------------------------------
+      # Step 3: Upload Batch Results
+      # --------------------------------------------------
+      # Matrix job outputs can't be aggregated directly (each matrix leg's
+      # output just overwrites the last one Actions recorded), so every batch
+      # writes its results to its own artifact instead — the report job
+      # below downloads and merges them.
+
+      - name: Upload Batch Results
+        uses: actions/upload-artifact@v4
+        with:
+          name:           branch-linearity-batch-${{ strategy.job-index }}
+          path:           results.json
+          retention-days: 14
+
+  # ====================================================
+  # Job 3: merge every batch's results into one report
+  # ====================================================
+  generate_report:
+    name: Generate Branch & Tag Linearity Report
+    needs: [discover_repositories, scan_repositories]
+    if: always() && needs.discover_repositories.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+
+      # --------------------------------------------------
+      # Step 1: Download Batch Results
+      # --------------------------------------------------
+
+      - name: Download Batch Results
+        uses: actions/download-artifact@v4
+        with:
+          pattern:        branch-linearity-batch-*
+          path:           results
+          merge-multiple: true
+
+      # --------------------------------------------------
+      # Step 2: Build Linearity Report
+      # --------------------------------------------------
+      # One repo per section (linked), a Branches table and a Tags table,
+      # columns: ref / has linear history (color-coded badge) / merge commits
+      # (linked, capped, with a "+N more" note). Protected branches (per
+      # PROTECTED_BRANCH_REGEX) are shield-marked, and a non-linear protected
+      # branch gets a distinct high-alert badge plus a callout — both inline
+      # on the repo and rolled up into one org-wide violations list up top,
+      # so a policy breach is never buried in a big table.
+
+      - name: Build Linearity Report
+        id: build_report
+        uses: actions/github-script@v9
+        env:
+          ORG:                    ${{ github.repository_owner }}
+          PROTECTED_BRANCH_REGEX: ${{ env.PROTECTED_BRANCH_REGEX }}
+          TAG_PATTERN_REGEX:      ${{ env.TAG_PATTERN_REGEX }}
+        with:
+          script: |
+            const fs   = require("fs");
+            const path = require("path");
+
+            // Color coding, done as shields.io badges — GitHub strips inline
+            // CSS from rendered Markdown, so a real badge image is what
+            // actually reads as "green = fine, red = not fine" rather than
+            // plain text. One shared badge builder, three fixed badges.
+            const badge = (label, message, color) =>
+              `![${label}: ${message}](https://img.shields.io/badge/${label}-${message.replace(/-/g, "--")}-${color})`;
+
+            const LINEAR_BADGE    = badge("history", "linear", "brightgreen");
+            const NONLINEAR_BADGE = badge("history", "non-linear", "red");
+            const VIOLATION_BADGE = badge("PROTECTED", "non-linear", "critical");
+
+            function historyCell(hasLinearHistory, isViolation) {
+              if (isViolation) return VIOLATION_BADGE;
+              return hasLinearHistory ? LINEAR_BADGE : NONLINEAR_BADGE;
+            }
+
+            function mergeCell(entry) {
+              if (!entry.mergeCommits || entry.mergeCommits.length === 0) return "-";
+              const shown = entry.mergeCommits.map(c => `[${c.sha}](${c.url})`).join(", ");
+              const extra = entry.mergeCount - entry.mergeCommits.length;
+              return extra > 0 ? `${shown}, +${extra} more` : shown;
+            }
+
+            const dir   = "results";
+            const files = fs.existsSync(dir)
+              ? fs.readdirSync(dir).filter(f => f.endsWith(".json"))
+              : [];
+
+            let repos = [];
+            for (const file of files) {
+              try {
+                const chunk = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
+                repos = repos.concat(chunk);
+              } catch (err) {
+                core.warning(`⚠️ Could not parse ${file}: ${err.message}`);
+              }
+            }
+
+            repos.sort((a, b) => a.repo.localeCompare(b.repo));
+            core.info(`Repos in report : ${repos.length}`);
+
+            const repoLines = [];
+            const violations = [];
+            let totalBranches = 0, linearBranches = 0;
+            let totalTags = 0, linearTags = 0, reposWithErrors = 0;
+
+            for (const r of repos) {
+              repoLines.push(`### [${r.repo}](${r.htmlUrl})`, "");
+
+              if (r.error) {
+                reposWithErrors++;
+                repoLines.push(`> ❌ Could not scan this repository: ${r.error}`, "");
+                continue;
+              }
+
+              const repoViolations = (r.branches || []).filter(b => b.protected && !b.hasLinearHistory);
+              for (const v of repoViolations) {
+                violations.push({ repo: r.repo, htmlUrl: r.htmlUrl, branch: v.branch, mergeCount: v.mergeCount });
+              }
+              if (repoViolations.length > 0) {
+                repoLines.push(
+                  `> 🚨 **Protected branch policy violation** — non-linear history on: ${repoViolations.map(b => `\`${b.branch}\``).join(", ")}`,
+                  ""
+                );
+              }
+
+              repoLines.push("**Branches**", "");
+              repoLines.push("| Branch | Has Linear History | Merge Commits |");
+              repoLines.push("| --- | --- | --- |");
+
+              for (const b of (r.branches || [])) {
+                totalBranches++;
+                if (b.hasLinearHistory) linearBranches++;
+
+                const isViolation = b.protected && !b.hasLinearHistory;
+                const branchLabel = b.protected ? `🛡️ **\`${b.branch}\`**` : `\`${b.branch}\``;
+
+                repoLines.push(`| ${branchLabel} | ${historyCell(b.hasLinearHistory, isViolation)} | ${mergeCell(b)} |`);
+              }
+              repoLines.push("");
+
+              repoLines.push("**Tags**", "");
+              if (!r.tags || r.tags.length === 0) {
+                repoLines.push("_No tags matching `v<major>.<minor>.<patch>` found._", "");
+              } else {
+                repoLines.push("| Tag | Has Linear History | Merge Commits |");
+                repoLines.push("| --- | --- | --- |");
+
+                for (const t of r.tags) {
+                  totalTags++;
+                  if (t.hasLinearHistory) linearTags++;
+
+                  repoLines.push(`| \`${t.tag}\` | ${historyCell(t.hasLinearHistory, false)} | ${mergeCell(t)} |`);
+                }
+                repoLines.push("");
+              }
+            }
+
+            const header = [
+              `## 📊 Branch & Tag History Linearity Report — \`${process.env.ORG}\``,
+              "",
+              `Protected branches: \`${process.env.PROTECTED_BRANCH_REGEX}\`. Tags analyzed: those matching \`${process.env.TAG_PATTERN_REGEX}\` (semver releases).`,
+              "A history is **linear** only when none of its commits — from the root to the tip — is a merge commit.",
+              "",
+              "| Repos scanned | Branches scanned | Tags scanned | Fully linear branches | Fully linear tags | Protected violations | Repos with errors |",
+              "| --- | --- | --- | --- | --- | --- | --- |",
+              `| ${repos.length} | ${totalBranches} | ${totalTags} | ${linearBranches} / ${totalBranches} | ${linearTags} / ${totalTags} | ${violations.length} | ${reposWithErrors} |`,
+              "",
+            ];
+
+            if (violations.length > 0) {
+              header.push("> 🚨 **Protected branch violations found:**");
+              for (const v of violations) {
+                header.push(`> - [\`${v.repo}\`](${v.htmlUrl}) → \`${v.branch}\` (${v.mergeCount} merge commit(s))`);
+              }
+              header.push("");
+            }
+
+            const report = [...header, ...repoLines].join("\n");
+
+            fs.writeFileSync("branch-linearity-report.md", report);
+
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + "\n");
+            }
+
+            core.info(`✅ Report written to branch-linearity-report.md and the job summary (${violations.length} protected violation(s))`);
+
+      # --------------------------------------------------
+      # Step 3: Upload Full Report
+      # --------------------------------------------------
+
+      - name: Upload Full Report
+        uses: actions/upload-artifact@v4
+        with:
+          name:           branch-linearity-report
+          path:           branch-linearity-report.md
+          retention-days: 30
