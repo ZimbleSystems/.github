@@ -298,12 +298,15 @@ jobs:
           # analyze_ref <ref> -> {hasLinearHistory, mergeCount, mergeCommits}
           # Shared by branches and tags below so the actual linearity check
           # (and the merge-commit list it returns) lives in exactly one place.
+          # Called only from inside scan_repo, which has already turned off
+          # -e (see below) — a ref git can't make sense of just returns
+          # non-zero here instead of tearing down the batch.
           # ------------------------------------------------------------------
           analyze_ref() {
             local ref="$1"
             local merge_count is_linear merge_commits
 
-            merge_count=$(git rev-list --min-parents=2 --count "$ref")
+            merge_count=$(git rev-list --min-parents=2 --count "$ref") || return 1
             is_linear="true"
             [ "$merge_count" -gt 0 ] && is_linear="false"
 
@@ -316,7 +319,7 @@ jobs:
               merge_commits=$(git log --merges --format='%H|%h' "$ref" | head -n 10 | jq -R -s -c --arg url "$html_url" '
                 split("\n") | map(select(length > 0)) | map(split("|")) |
                 map({sha: .[1], url: ($url + "/commit/" + .[0])})
-              ')
+              ') || return 1
             fi
 
             jq -c -n \
@@ -326,26 +329,59 @@ jobs:
               '{hasLinearHistory: $linear, mergeCount: $mergeCount, mergeCommits: $mergeCommits}'
           }
 
-          while IFS= read -r repo_json; do
-            name=$(echo "$repo_json" | jq -r '.name')
-            html_url=$(echo "$repo_json" | jq -r '.htmlUrl')
+          # ------------------------------------------------------------------
+          # scan_repo <repo-json-line> -> appends exactly one JSON object to
+          # results.jsonl, then returns 0. This is the fix for a real bug: with
+          # `set -e` active, ONE unexpected failure anywhere in here — a
+          # malformed ref, a transient git error, anything not already
+          # explicitly guarded — used to abort the ENTIRE batch script before
+          # it ever reached "Upload Batch Results", silently dropping every
+          # repo in that batch (not just the one that broke) from the report.
+          # `set +e` + `trap 'set -e' RETURN` scopes errexit OFF for the
+          # duration of this function only (bash restores it the instant the
+          # function returns, on every path), so a failure anywhere inside —
+          # the clone, a single ref, an unexpected git/jq hiccup — is caught
+          # explicitly below and turned into a partial/error result instead of
+          # taking the rest of the batch down with it.
+          # ------------------------------------------------------------------
+          scan_repo() {
+            trap 'set -e' RETURN
+            set +e
+
+            local repo_json="$1"
+            local name html_url workdir
+            local branch_results branches branch is_protected stats
+            local tag_results all_tags tag
+            local branch_count tag_count
+
+            name=$(echo "$repo_json" | jq -r '.name // empty')
+            html_url=$(echo "$repo_json" | jq -r '.htmlUrl // empty')
 
             echo ""
             echo "=================================================="
-            echo "🔍 Scanning ${name}"
+            echo "🔍 Scanning ${name:-<unknown>}"
             echo "=================================================="
+
+            if [ -z "$name" ]; then
+              echo "❌ Could not read repo name from batch entry — skipping"
+              jq -n --arg url "${html_url:-}" --arg err "Malformed batch entry (missing name)" \
+                '{repo: "unknown", htmlUrl: $url, error: $err, branches: [], tags: []}' >> results.jsonl
+              return 0
+            fi
 
             workdir="clone-${name//\//_}"
             rm -rf "$workdir"
 
-            if ! git clone --bare --filter=blob:none --quiet \
+            # 300s cap: a single stalled/slow clone can't eat the whole
+            # batch's time budget and starve the other repos in it.
+            if ! timeout 300 git clone --bare --filter=blob:none --quiet \
                 "https://x-access-token:${TOKEN}@github.com/${ORG}/${name}.git" "$workdir" 2>clone-error.log; then
               err=$(tr '\n' ' ' < clone-error.log | sed 's/"/\\"/g' | cut -c1-300)
               echo "❌ Clone failed for ${name}: ${err}"
               jq -n --arg repo "$name" --arg url "$html_url" --arg err "$err" \
                 '{repo: $repo, htmlUrl: $url, error: $err, branches: [], tags: []}' >> results.jsonl
               rm -rf "$workdir" clone-error.log
-              continue
+              return 0
             fi
             rm -f clone-error.log
 
@@ -353,7 +389,7 @@ jobs:
 
             # ---- branches: every branch, none skipped ----
             branch_results="[]"
-            branches=$(git for-each-ref --format='%(refname:short)' refs/heads/ | sort || true)
+            branches=$(git for-each-ref --format='%(refname:short)' refs/heads/ | sort)
 
             while IFS= read -r branch; do
               [ -z "$branch" ] && continue
@@ -361,7 +397,10 @@ jobs:
               is_protected="false"
               [[ "$branch" =~ $PROTECTED_BRANCH_REGEX ]] && is_protected="true"
 
-              stats=$(analyze_ref "$branch")
+              if ! stats=$(analyze_ref "$branch"); then
+                echo "⚠️ Could not analyze branch ${branch} in ${name} — skipping it, continuing with the rest"
+                continue
+              fi
 
               branch_results=$(echo "$branch_results" | jq -c \
                 --arg branch "$branch" --argjson protected "$is_protected" --argjson stats "$stats" \
@@ -370,13 +409,16 @@ jobs:
 
             # ---- tags: only those matching TAG_PATTERN_REGEX (semver releases) ----
             tag_results="[]"
-            all_tags=$(git for-each-ref --format='%(refname:short)' refs/tags/ | sort || true)
+            all_tags=$(git for-each-ref --format='%(refname:short)' refs/tags/ | sort)
 
             while IFS= read -r tag; do
               [ -z "$tag" ] && continue
               [[ "$tag" =~ $TAG_PATTERN_REGEX ]] || continue
 
-              stats=$(analyze_ref "$tag")
+              if ! stats=$(analyze_ref "$tag"); then
+                echo "⚠️ Could not analyze tag ${tag} in ${name} — skipping it, continuing with the rest"
+                continue
+              fi
 
               tag_results=$(echo "$tag_results" | jq -c \
                 --arg tag "$tag" --argjson stats "$stats" \
@@ -394,10 +436,22 @@ jobs:
             branch_count=$(echo "$branch_results" | jq 'length')
             tag_count=$(echo "$tag_results" | jq 'length')
             echo "✅ Done: ${name} (${branch_count} branch(es), ${tag_count} matching tag(s))"
+          }
 
+          while IFS= read -r repo_json; do
+            # Belt-and-suspenders: scan_repo already catches everything it
+            # knows how to expect, but if it still returns non-zero for some
+            # truly unanticipated reason, that repo is recorded as an error
+            # rather than the rest of the batch quietly disappearing with it.
+            if ! scan_repo "$repo_json"; then
+              name=$(echo "$repo_json" | jq -r '.name // "unknown"' 2>/dev/null || echo "unknown")
+              echo "❌ Unexpected failure scanning ${name} — recording it as an error and moving on"
+              jq -n --arg repo "$name" --arg err "Unexpected script error while scanning this repository (see workflow logs for this batch)" \
+                '{repo: $repo, htmlUrl: "", error: $err, branches: [], tags: []}' >> results.jsonl
+            fi
           done < repos.jsonl
 
-          jq -s '.' results.jsonl > results.json
+          jq -s '.' results.jsonl > results.json 2>/dev/null || echo '[]' > results.json
           echo "ℹ️ Batch complete. Repos processed: $(jq 'length' results.json)"
 
       # --------------------------------------------------
@@ -406,14 +460,20 @@ jobs:
       # Matrix job outputs can't be aggregated directly (each matrix leg's
       # output just overwrites the last one Actions recorded), so every batch
       # writes its results to its own artifact instead — the report job
-      # below downloads and merges them.
+      # below downloads and merges them. `if: always()` + `if-no-files-found:
+      # warn` mean that even if the scan step above somehow still fails
+      # outright, whatever partial results.json exists gets uploaded (or the
+      # batch is just skipped with a warning) rather than one bad batch
+      # silently costing every repo assigned to it.
 
       - name: Upload Batch Results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name:           branch-linearity-batch-${{ strategy.job-index }}
-          path:           results.json
-          retention-days: 14
+          name:               branch-linearity-batch-${{ strategy.job-index }}
+          path:               results.json
+          retention-days:     14
+          if-no-files-found:  warn
 
   # ====================================================
   # Job 3: merge every batch's results into one report
