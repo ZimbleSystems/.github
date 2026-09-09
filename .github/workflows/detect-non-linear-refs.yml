@@ -33,6 +33,24 @@ on:
         required: true
         default: "5"
 
+      delete_batch_artifacts:
+        description: "Delete the intermediate per-batch JSON artifacts once they're folded into the final report"
+        required: true
+        default: true
+        type: boolean
+
+      hide_eligible_repos_list:
+        description: "Hide the full eligible-repos list in the Discover And Batch Repositories job summary (it's always in the job logs either way)"
+        required: true
+        default: true
+        type: boolean
+
+      hide_per_repo_details:
+        description: "Hide the per-repo branch/tag detail tables in the Generate Non-Linear Refs Report job summary (the full detail always stays in the downloadable .md report)"
+        required: true
+        default: true
+        type: boolean
+
 # Only one scan at a time — a re-dispatch supersedes whatever is already
 # running instead of doubling up on compute.
 concurrency:
@@ -95,18 +113,20 @@ jobs:
         id: compute_target_repos
         uses: actions/github-script@v9
         env:
-          MODE:             ${{ inputs.mode }}
-          TARGET_REPOS:     ${{ inputs.target_repos }}
-          INCLUDE_ARCHIVED: ${{ inputs.include_archived }}
-          INCLUDE_FORKS:    ${{ inputs.include_forks }}
+          MODE:                     ${{ inputs.mode }}
+          TARGET_REPOS:             ${{ inputs.target_repos }}
+          INCLUDE_ARCHIVED:         ${{ inputs.include_archived }}
+          INCLUDE_FORKS:            ${{ inputs.include_forks }}
+          HIDE_ELIGIBLE_REPOS_LIST: ${{ inputs.hide_eligible_repos_list }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
-            const org              = context.repo.owner;
-            const mode             = process.env.MODE;
-            const targetReposInput = process.env.TARGET_REPOS;
-            const includeArchived  = process.env.INCLUDE_ARCHIVED === "true";
-            const includeForks     = process.env.INCLUDE_FORKS === "true";
+            const org                   = context.repo.owner;
+            const mode                  = process.env.MODE;
+            const targetReposInput      = process.env.TARGET_REPOS;
+            const includeArchived       = process.env.INCLUDE_ARCHIVED === "true";
+            const includeForks          = process.env.INCLUDE_FORKS === "true";
+            const hideEligibleReposList = process.env.HIDE_ELIGIBLE_REPOS_LIST === "true";
 
             core.info(`Mode             : ${mode}`);
             core.info(`Include archived : ${includeArchived}`);
@@ -195,7 +215,6 @@ jobs:
                   ({ data } = await github.rest.repos.get({ owner: org, repo }));
                 } catch (err) {
                   const reason = err.message || "not found or inaccessible";
-                  core.warning(`Invalid or inaccessible repo : ${repo} (${reason})`);
                   invalidRepos.push({ name: repo, reason });
                   continue;
                 }
@@ -208,6 +227,18 @@ jobs:
                 }
 
                 repos.push(toTarget(data));
+              }
+
+              // One annotation covering every invalid/inaccessible repo,
+              // not one per repo — a selective-mode typo list of any real
+              // size used to produce one annotation per bad name, which
+              // buried the actually-useful ones (skipped-ineligible,
+              // scan failures) under a wall of near-duplicate entries.
+              if (invalidRepos.length > 0) {
+                core.warning(
+                  `Invalid or inaccessible repos (${invalidRepos.length}):\n` +
+                  invalidRepos.map(r => `- ${r.name} (${r.reason})`).join("\n")
+                );
               }
 
               if (repos.length === 0) {
@@ -236,7 +267,13 @@ jobs:
             // Markdown table + linked list instead of buried in the raw log.
             // Skipped and invalid repos each get their own section — one
             // entry per line, carrying the specific reason — instead of one
-            // comma-joined blob that hid both which repo and why.
+            // comma-joined blob that hid both which repo and why. Those two
+            // sections are never gated by hideEligibleReposList — only the
+            // full eligible-repos list below is, since it's the one section
+            // whose size actually scales with org size; skipped/invalid are
+            // exactly the repos someone would come here to check on, so
+            // they always render regardless of the flag (the full eligible
+            // list is always in the job logs above either way).
             if (process.env.GITHUB_STEP_SUMMARY) {
               const summaryLines = [
                 "### 🎯 Target Repositories",
@@ -248,7 +285,15 @@ jobs:
               ];
 
               if (repos.length > 0) {
-                summaryLines.push(...repos.map(r => `- [${r.name}](${r.htmlUrl})`), "");
+                if (hideEligibleReposList) {
+                  summaryLines.push(
+                    "_Eligible repos list hidden — see the job logs above for the full list, " +
+                      "or re-run with `hide_eligible_repos_list: false` to show it here too._",
+                    ""
+                  );
+                } else {
+                  summaryLines.push(...repos.map(r => `- [${r.name}](${r.htmlUrl})`), "");
+                }
               }
 
               if (skippedIneligible.length > 0) {
@@ -624,11 +669,13 @@ jobs:
           TAG_PATTERN_REGEX:      ${{ env.TAG_PATTERN_REGEX }}
           TOTAL_ELIGIBLE:         ${{ needs.discover_repositories.outputs.total }}
           SCAN_JOB_RESULT:        ${{ needs.scan_repositories.result }}
+          HIDE_PER_REPO_DETAILS:  ${{ inputs.hide_per_repo_details }}
         with:
           script: |
             const fs      = require("fs");
             const path    = require("path");
             const ExcelJS = require("exceljs");
+            const hidePerRepoDetails = process.env.HIDE_PER_REPO_DETAILS === "true";
 
             // Unique file names — the date + run number embedded in both
             // paths below — so downloading reports from several runs into
@@ -1068,16 +1115,35 @@ jobs:
               core.info(`✅ Excel violations summary written to ${xlsxPath} (${allViolations.length} row(s))`);
             }
 
-            const report = [...header, ...repoLines].join("\n");
+            // The downloadable .md artifact always gets the full report —
+            // header (stats + violations rollup) AND every repo's own
+            // Branches/Tags tables. `hidePerRepoDetails` only ever trims
+            // what gets rendered inline on the job's step-summary page:
+            // the per-repo section there can run to hundreds of tables for
+            // a large org, which is exactly what makes that page slow to
+            // load — the stats table and the violations rollup (both
+            // already inside `header`) stay in the summary either way,
+            // since those are the two things worth seeing at a glance.
+            const fullReport = [...header, ...repoLines].join("\n");
 
-            fs.writeFileSync(mdPath, report);
+            const summaryReport = hidePerRepoDetails
+              ? [
+                  ...header,
+                  "> ℹ️ Per-repo detail tables are hidden in this summary — the full report artifact " +
+                    "(above) has every repo's Branches/Tags tables, or re-run with `hide_per_repo_details: false` " +
+                    "to show them here too.",
+                  "",
+                ].join("\n")
+              : fullReport;
+
+            fs.writeFileSync(mdPath, fullReport);
             core.setOutput("report_path", mdPath);
 
             if (process.env.GITHUB_STEP_SUMMARY) {
-              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + "\n");
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryReport + "\n");
             }
 
-            core.info(`✅ Report written to ${mdPath} and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
+            core.info(`✅ Report written to ${mdPath} (full detail) and the job summary (${hidePerRepoDetails ? "condensed — per-repo tables hidden" : "full detail"}); ${allViolations.length} violation(s), ${protectedViolationCount} on protected refs`);
 
       # --------------------------------------------------
       # Step 4: Upload Full Report
@@ -1133,12 +1199,17 @@ jobs:
       # already folded every one of them into report_path/xlsx_path, so by
       # this point they've done their job; left alone they'd just sit in
       # the run's Artifacts list next to the two files people actually want
-      # — the final report and the Excel summary. No `if:` beyond the step
-      # default (only runs once every required step above has succeeded):
-      # if the report build itself failed, the raw batch data is left in
-      # place to debug from instead of being deleted along with it.
+      # — the final report and the Excel summary. Gated on
+      # `delete_batch_artifacts` (default true) so a run can opt out and
+      # keep the raw per-batch JSON around — e.g. to inspect one batch's
+      # output directly without re-running the whole scan. Beyond that
+      # input, no further `if:` is needed beyond the step default (only
+      # runs once every required step above has succeeded): if the report
+      # build itself failed, the raw batch data is left in place to debug
+      # from instead of being deleted along with it.
 
       - name: Delete Batch Artifacts
+        if: success() && inputs.delete_batch_artifacts
         uses: actions/github-script@v9
         with:
           script: |
