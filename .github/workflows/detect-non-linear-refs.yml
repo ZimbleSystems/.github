@@ -562,6 +562,13 @@ jobs:
     if: always() && needs.discover_repositories.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Scoped down from the workflow-level `contents: read` (this job never
+    # checks out or reads repo content) and up to include `actions: write`
+    # — needed only by "Delete Batch Artifacts" below, to call the Actions
+    # API and remove the per-batch JSON artifacts once they're folded into
+    # the final report.
+    permissions:
+      actions: write
 
     steps:
 
@@ -1114,3 +1121,42 @@ jobs:
           path:               ${{ steps.build_report.outputs.xlsx_path }}
           retention-days:     30
           if-no-files-found:  warn
+
+      # --------------------------------------------------
+      # Step 6: Delete Batch Artifacts
+      # --------------------------------------------------
+      # non-linear-refs-batch-* exists purely so each matrix leg in
+      # scan_repositories could hand its results across to this job —
+      # GitHub Actions gives matrix legs no shared filesystem, and a job
+      # output can't carry this much data, so an artifact upload/download
+      # was the only way across. "Build Non-Linear Refs Report" above has
+      # already folded every one of them into report_path/xlsx_path, so by
+      # this point they've done their job; left alone they'd just sit in
+      # the run's Artifacts list next to the two files people actually want
+      # — the final report and the Excel summary. No `if:` beyond the step
+      # default (only runs once every required step above has succeeded):
+      # if the report build itself failed, the raw batch data is left in
+      # place to debug from instead of being deleted along with it.
+
+      - name: Delete Batch Artifacts
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              run_id:   context.runId,
+              per_page: 100,
+            });
+
+            const batchArtifacts = artifacts.filter(a => a.name.startsWith("non-linear-refs-batch-"));
+            core.info(`Deleting ${batchArtifacts.length} batch artifact(s) now folded into the final report`);
+
+            for (const artifact of batchArtifacts) {
+              await github.rest.actions.deleteArtifact({
+                owner:       context.repo.owner,
+                repo:        context.repo.repo,
+                artifact_id: artifact.id,
+              });
+              core.info(`  🗑️ Deleted ${artifact.name}`);
+            }
