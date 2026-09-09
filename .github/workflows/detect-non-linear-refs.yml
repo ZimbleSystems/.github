@@ -1018,11 +1018,14 @@ jobs:
       # severity cells requested for the Markdown table (only approximated
       # there — GitHub strips row colors and Markdown has no real rowspan)
       # can be the real thing: true merged cells and true cell fill colors.
-      # `if-no-files-found: warn` because a run with zero violations never
-      # creates this file — nothing to upload isn't a failure.
+      # No `if: always()` here — matches "Upload Full Report" right below,
+      # which also has none: if the report-building step fails outright,
+      # neither artifact uploads, rather than one surviving and the other
+      # not. `if-no-files-found: warn` alone is what covers the ordinary
+      # zero-violations case — that's not a failure, the step still runs,
+      # there's just no .xlsx to attach, so warn instead of erroring.
 
       - name: Upload Excel Violations Summary
-        if: always()
         uses: actions/upload-artifact@v7
         with:
           name:               non-linear-refs-violations-xlsx
