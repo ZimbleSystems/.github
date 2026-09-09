@@ -1,4 +1,4 @@
-name: Check Branch & Tag History Linearity
+name: Detect Non-Linear Refs
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ on:
 # Only one scan at a time — a re-dispatch supersedes whatever is already
 # running instead of doubling up on compute.
 concurrency:
-  group: check-branch-linearity
+  group: detect-non-linear-refs
   cancel-in-progress: true
 
 permissions:
@@ -302,7 +302,7 @@ jobs:
   # (branches and matching tags alike)
   # ====================================================
   scan_repositories:
-    name: Scan Batch For Branch & Tag Linearity
+    name: Scan Batch For Non-Linear Refs
     needs: discover_repositories
     if: success() && needs.discover_repositories.outputs.total != '0'
     runs-on: ubuntu-latest
@@ -328,7 +328,7 @@ jobs:
           owner:       ${{ github.repository_owner }}
 
       # --------------------------------------------------
-      # Step 2: Scan Batch For Branch & Tag Linearity
+      # Step 2: Scan Batch For Non-Linear Refs
       # --------------------------------------------------
       # Bare clone with `--filter=blob:none` (a "blobless" partial clone):
       # every commit and tree object comes across, but no file content.
@@ -342,7 +342,7 @@ jobs:
       # (no cap) — tags are filtered to TAG_PATTERN_REGEX first, since most
       # tags in a repo are never release tags.
 
-      - name: Scan Batch For Branch & Tag Linearity
+      - name: Scan Batch For Non-Linear Refs
         id: scan_batch
         env:
           ORG:                     ${{ github.repository_owner }}
@@ -548,7 +548,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name:               branch-linearity-batch-${{ strategy.job-index }}
+          name:               non-linear-refs-batch-${{ strategy.job-index }}
           path:               results-${{ strategy.job-index }}.json
           retention-days:     14
           if-no-files-found:  warn
@@ -557,7 +557,7 @@ jobs:
   # Job 3: merge every batch's results into one report
   # ====================================================
   generate_report:
-    name: Generate Branch & Tag Linearity Report
+    name: Generate Non-Linear Refs Report
     needs: [discover_repositories, scan_repositories]
     if: always() && needs.discover_repositories.result == 'success'
     runs-on: ubuntu-latest
@@ -572,12 +572,12 @@ jobs:
       - name: Download Batch Results
         uses: actions/download-artifact@v8
         with:
-          pattern:        branch-linearity-batch-*
+          pattern:        non-linear-refs-batch-*
           path:           results
           merge-multiple: true
 
       # --------------------------------------------------
-      # Step 2: Build Linearity Report
+      # Step 2: Build Non-Linear Refs Report
       # --------------------------------------------------
       # One repo per section (linked), a Branches table and a Tags table,
       # columns: ref / has linear history (color-coded badge) / merge commits
@@ -596,7 +596,7 @@ jobs:
       # commit in a released version's history is exactly what this workflow
       # exists to catch.
 
-      - name: Build Linearity Report
+      - name: Build Non-Linear Refs Report
         id: build_report
         uses: actions/github-script@v9
         env:
@@ -775,7 +775,7 @@ jobs:
             }
 
             const header = [
-              `## 📊 Branch & Tag History Linearity Report — \`${process.env.ORG}\``,
+              `## 📊 Non-Linear Refs Report — \`${process.env.ORG}\``,
               "",
               `Protected branches: \`${process.env.PROTECTED_BRANCH_REGEX}\`. Tags analyzed: those matching \`${process.env.TAG_PATTERN_REGEX}\` (semver releases).`,
               "A history is **linear** only when none of its commits — from the root to the tip — is a merge commit.",
@@ -785,7 +785,7 @@ jobs:
             if (incomplete) {
               header.push(
                 `> ⚠️ **Incomplete scan** — this report covers only ${repos.length} of ${totalEligible} eligible repositories (scan job result: \`${scanJobResult}\`).`,
-                "> This usually means the run was cancelled or superseded by a newer dispatch before every batch finished. Check the \"Scan Batch For Branch & Tag Linearity\" job logs for this run, or re-run the workflow.",
+                "> This usually means the run was cancelled or superseded by a newer dispatch before every batch finished. Check the \"Scan Batch For Non-Linear Refs\" job logs for this run, or re-run the workflow.",
                 ""
               );
             }
@@ -857,13 +857,13 @@ jobs:
 
             const report = [...header, ...repoLines].join("\n");
 
-            fs.writeFileSync("branch-linearity-report.md", report);
+            fs.writeFileSync("non-linear-refs-report.md", report);
 
             if (process.env.GITHUB_STEP_SUMMARY) {
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + "\n");
             }
 
-            core.info(`✅ Report written to branch-linearity-report.md and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
+            core.info(`✅ Report written to non-linear-refs-report.md and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
 
       # --------------------------------------------------
       # Step 3: Upload Full Report
@@ -872,6 +872,6 @@ jobs:
       - name: Upload Full Report
         uses: actions/upload-artifact@v7
         with:
-          name:           branch-linearity-report
-          path:           branch-linearity-report.md
+          name:           non-linear-refs-report
+          path:           non-linear-refs-report.md
           retention-days: 30
