@@ -138,7 +138,10 @@ jobs:
               };
             }
 
-            let repos = [];
+            const fs = require("fs");
+
+            let repos   = [];
+            let skipped = [];
 
             if (mode === "bulk") {
               core.info("Fetching all repositories in the organization...");
@@ -170,7 +173,6 @@ jobs:
               }
 
               const validRepos = [];
-              const skipped     = [];
 
               for (const repo of inputRepos) {
                 try {
@@ -201,8 +203,34 @@ jobs:
               repos = validRepos;
             }
 
-            core.info(`Final repos to scan (${repos.length}) : ${repos.map(r => r.name).join(", ")}`);
+            // One repo per line rather than one long comma-joined string —
+            // readable at any repo count, and easy to diff between runs.
+            const repoListText = repos.map(r => `  - ${r.name}`).join("\n");
+            core.info(`Final repos to scan (${repos.length}):\n${repoListText}`);
             core.setOutput("repos", JSON.stringify(repos));
+
+            // Job step summary: the same eligible-repo list, rendered as a
+            // Markdown table + linked list instead of buried in the raw log.
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              const summaryLines = [
+                "### 🎯 Target Repositories",
+                "",
+                "| Mode | Include Archived | Include Forks | Eligible Repos |",
+                "| --- | --- | --- | --- |",
+                `| ${mode} | ${includeArchived} | ${includeForks} | ${repos.length} |`,
+                "",
+              ];
+
+              if (repos.length > 0) {
+                summaryLines.push(...repos.map(r => `- [${r.name}](${r.htmlUrl})`), "");
+              }
+
+              if (skipped.length > 0) {
+                summaryLines.push(`> ⚠️ Skipped (ineligible or invalid): ${skipped.join(", ")}`, "");
+              }
+
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryLines.join("\n") + "\n");
+            }
 
       # --------------------------------------------------
       # Step 3: Build Scan Matrix
