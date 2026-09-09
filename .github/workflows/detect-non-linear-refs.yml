@@ -665,11 +665,17 @@ jobs:
             // refs are all unprotected (informational, not a breach).
             const SEVERITY_PROTECTED_BADGE   = plainBadge("protected-violation", "b30000");
             // Lighter shade of the same red family as the protected badge
-            // above (was amber) — shields.io picks the message text color
-            // automatically for contrast, so no separate font-color knob is
-            // needed here; the Excel companion below sets one explicitly
-            // since xlsx has no such auto-contrast.
-            const SEVERITY_UNPROTECTED_BADGE = plainBadge("unprotected-only", "ef9a9a");
+            // above (was amber). shields.io has no explicit font-color
+            // knob — it auto-picks black or white message text from the
+            // background's own luminance, so the shade itself has to be
+            // chosen with that in mind: a very pale red (e.g. ef9a9a)
+            // falls on the light side and gets dark #333 text, while this
+            // one (Material "red 300") sits just dark enough to still
+            // read as a lighter red yet get the white text shields.io
+            // renders on the protected badge above. The Excel companion
+            // below sets its badge font explicitly instead, since xlsx
+            // has no such auto-contrast to lean on.
+            const SEVERITY_UNPROTECTED_BADGE = plainBadge("unprotected-only", "e57373");
 
             function historyCell(hasLinearHistory, isViolation) {
               if (isViolation) return VIOLATION_BADGE;
