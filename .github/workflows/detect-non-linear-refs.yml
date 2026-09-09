@@ -622,6 +622,14 @@ jobs:
             const badge = (label, message, color) =>
               `![${label}: ${message}](https://img.shields.io/badge/${label}-${message.replace(/-/g, "--")}-${color})`;
 
+            // Label-less variant — just the colored message, no repeated
+            // "label:" prefix baked into the image. Used only for the
+            // severity badges below, which already sit under a "Severity"
+            // column header; repeating that word inside the badge itself
+            // would just be noise next to the header.
+            const plainBadge = (message, color) =>
+              `![${message}](https://img.shields.io/badge/${message.replace(/-/g, "--")}-${color})`;
+
             const LINEAR_BADGE    = badge("history", "linear", "brightgreen");
             const NONLINEAR_BADGE = badge("history", "non-linear", "red");
             const VIOLATION_BADGE = badge("history", "non-linear", "critical");
@@ -633,8 +641,8 @@ jobs:
             // for a repo with at least one PROTECTED violation (the real
             // policy breach) vs. a lighter shade for a repo whose non-linear
             // refs are all unprotected (informational, not a breach).
-            const SEVERITY_PROTECTED_BADGE   = badge("severity", "protected-violation", "b30000");
-            const SEVERITY_UNPROTECTED_BADGE = badge("severity", "unprotected-only", "ffb300");
+            const SEVERITY_PROTECTED_BADGE   = plainBadge("protected-violation", "b30000");
+            const SEVERITY_UNPROTECTED_BADGE = plainBadge("unprotected-only", "ffb300");
 
             function historyCell(hasLinearHistory, isViolation) {
               if (isViolation) return VIOLATION_BADGE;
