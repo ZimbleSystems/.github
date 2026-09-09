@@ -577,7 +577,19 @@ jobs:
           merge-multiple: true
 
       # --------------------------------------------------
-      # Step 2: Build Non-Linear Refs Report
+      # Step 2: Install Report Dependencies
+      # --------------------------------------------------
+      # actions/github-script has no spreadsheet library built in, but it CAN
+      # require() a package installed into the job's working directory by a
+      # prior step — exactly what this does. Installed here (not committed to
+      # the repo) so the version is pinned in one place and never drifts from
+      # what the next step expects.
+
+      - name: Install Report Dependencies
+        run: npm install exceljs@4.4.0 --no-save
+
+      # --------------------------------------------------
+      # Step 3: Build Non-Linear Refs Report
       # --------------------------------------------------
       # One repo per section (linked), a Branches table and a Tags table,
       # columns: ref / has linear history (color-coded badge) / merge commits
@@ -607,8 +619,9 @@ jobs:
           SCAN_JOB_RESULT:        ${{ needs.scan_repositories.result }}
         with:
           script: |
-            const fs   = require("fs");
-            const path = require("path");
+            const fs      = require("fs");
+            const path    = require("path");
+            const ExcelJS = require("exceljs");
 
             // Color coding, done as shields.io badges — GitHub strips inline
             // CSS from rendered Markdown, so a real badge image is what
@@ -665,6 +678,17 @@ jobs:
             function mergeCell(entry) {
               if (!entry.mergeCommits || entry.mergeCommits.length === 0) return "-";
               const shown = entry.mergeCommits.map(c => `[${c.sha}](${c.url})`).join(", ");
+              const extra = entry.mergeCount - entry.mergeCommits.length;
+              return extra > 0 ? `${shown}, +${extra} more` : shown;
+            }
+
+            // Same info as mergeCell() above, as plain text — a spreadsheet
+            // cell can't hold multiple hyperlinks, so the SHA list here has
+            // no links; the Repo cell's own hyperlink is enough to get from
+            // the workbook back to the source.
+            function mergeCommitsPlainText(entry) {
+              if (!entry.mergeCommits || entry.mergeCommits.length === 0) return "-";
+              const shown = entry.mergeCommits.map(c => c.sha).join(", ");
               const extra = entry.mergeCount - entry.mergeCommits.length;
               return extra > 0 ? `${shown}, +${extra} more` : shown;
             }
@@ -860,7 +884,109 @@ jobs:
                   header.push(`| ${repoCell} | ${severityCell} | ${refLabel(v.ref, v.protected, false)} | ${v.refType} | ${mergeCell(v)} |`);
                 });
               }
-              header.push("");
+              header.push(
+                "",
+                "📎 A color-formatted Excel version of this table (`non-linear-refs-violations.xlsx`, with real merged repo/severity " +
+                  "cells and real cell colors — this Markdown table can only approximate both) is attached to this run's artifacts.",
+                ""
+              );
+
+              // ------------------------------------------------------------
+              // Excel companion to the table above. Same repoGroups, so the
+              // grouping/sort order can never drift between the two — this
+              // is just a second renderer of data already computed once.
+              // Unlike Markdown, xlsx has no rendering restrictions, so the
+              // color-coding and repo/severity cell merging originally asked
+              // for can be the real thing here instead of an approximation:
+              // true merged cells (sheet.mergeCells) and true cell fill
+              // colors, not a blank-cell trick or a badge image standing in
+              // for color.
+              // ------------------------------------------------------------
+              const workbook = new ExcelJS.Workbook();
+              const sheet    = workbook.addWorksheet("Violations", {
+                views: [{ state: "frozen", ySplit: 1 }],
+              });
+
+              sheet.columns = [
+                { header: "Repo",          key: "repo",         width: 34 },
+                { header: "Severity",      key: "severity",     width: 20 },
+                { header: "Ref",           key: "ref",          width: 30 },
+                { header: "Type",          key: "type",         width: 10 },
+                { header: "Protected",     key: "protected",    width: 12 },
+                { header: "Merge Commits", key: "mergeCommits", width: 60 },
+              ];
+
+              const headerRow = sheet.getRow(1);
+              headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+              headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF37474F" } };
+              headerRow.alignment = { vertical: "middle" };
+
+              // Darker tint for a repo with a real protected-ref breach,
+              // lighter for one whose non-linear refs are all unprotected —
+              // the same distinction the Markdown severity badge draws,
+              // applied here as an actual row background instead of an image.
+              const PROTECTED_ROW_FILL     = "FFF8D7DA";
+              const UNPROTECTED_ROW_FILL   = "FFFFF3CD";
+              const PROTECTED_BADGE_FILL   = "FFB30000";
+              const UNPROTECTED_BADGE_FILL = "FFFFB300";
+              const THIN_GREY_BORDER = { style: "thin", color: { argb: "FFBDBDBD" } };
+
+              let excelRow = 2; // row 1 is the header
+              for (const g of repoGroups) {
+                const groupStartRow = excelRow;
+                const rowFill    = g.hasProtected ? PROTECTED_ROW_FILL   : UNPROTECTED_ROW_FILL;
+                const badgeFill  = g.hasProtected ? PROTECTED_BADGE_FILL : UNPROTECTED_BADGE_FILL;
+                const severityText = g.hasProtected ? "PROTECTED VIOLATION" : "UNPROTECTED ONLY";
+
+                for (const v of g.refs) {
+                  const row = sheet.addRow({
+                    repo:         g.repo,
+                    severity:     severityText,
+                    ref:          v.ref,
+                    type:         v.refType,
+                    protected:    v.protected ? "Yes" : "No",
+                    mergeCommits: mergeCommitsPlainText(v),
+                  });
+
+                  row.eachCell((cell) => {
+                    cell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: rowFill } };
+                    cell.alignment = { vertical: "middle", wrapText: true };
+                    cell.border    = { top: THIN_GREY_BORDER, left: THIN_GREY_BORDER, bottom: THIN_GREY_BORDER, right: THIN_GREY_BORDER };
+                  });
+
+                  const repoCell = row.getCell("repo");
+                  repoCell.value = { text: g.repo, hyperlink: g.htmlUrl };
+                  repoCell.font  = { underline: true, color: { argb: "FF0563C1" } };
+
+                  if (v.protected) {
+                    row.getCell("ref").font = { bold: true };
+                  }
+
+                  excelRow++;
+                }
+
+                const groupEndRow = excelRow - 1;
+
+                // Real merged cells — the Excel-native equivalent of the
+                // blank-continuation-row trick the Markdown table needs.
+                if (groupEndRow > groupStartRow) {
+                  sheet.mergeCells(groupStartRow, 1, groupEndRow, 1); // Repo
+                  sheet.mergeCells(groupStartRow, 2, groupEndRow, 2); // Severity
+                }
+
+                const severityCell = sheet.getCell(groupStartRow, 2);
+                severityCell.fill      = { type: "pattern", pattern: "solid", fgColor: { argb: badgeFill } };
+                severityCell.font      = { bold: true, color: { argb: g.hasProtected ? "FFFFFFFF" : "FF3E2723" } };
+                severityCell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+
+                sheet.getCell(groupStartRow, 1).alignment = { vertical: "middle", wrapText: true };
+              }
+
+              sheet.autoFilter = { from: "A1", to: "F1" };
+
+              const xlsxPath = "non-linear-refs-violations.xlsx";
+              await workbook.xlsx.writeFile(xlsxPath);
+              core.info(`✅ Excel violations summary written to ${xlsxPath} (${allViolations.length} row(s))`);
             }
 
             const report = [...header, ...repoLines].join("\n");
@@ -874,7 +1000,7 @@ jobs:
             core.info(`✅ Report written to non-linear-refs-report.md and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
 
       # --------------------------------------------------
-      # Step 3: Upload Full Report
+      # Step 4: Upload Full Report
       # --------------------------------------------------
 
       - name: Upload Full Report
@@ -883,3 +1009,23 @@ jobs:
           name:           non-linear-refs-report
           path:           non-linear-refs-report.md
           retention-days: 30
+
+      # --------------------------------------------------
+      # Step 5: Upload Excel Violations Summary
+      # --------------------------------------------------
+      # Only the violations rollup table (not the full per-repo detail) —
+      # as an actual .xlsx this time, so the color-coding and merged repo/
+      # severity cells requested for the Markdown table (only approximated
+      # there — GitHub strips row colors and Markdown has no real rowspan)
+      # can be the real thing: true merged cells and true cell fill colors.
+      # `if-no-files-found: warn` because a run with zero violations never
+      # creates this file — nothing to upload isn't a failure.
+
+      - name: Upload Excel Violations Summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name:               non-linear-refs-violations-xlsx
+          path:               non-linear-refs-violations.xlsx
+          retention-days:     30
+          if-no-files-found:  warn
