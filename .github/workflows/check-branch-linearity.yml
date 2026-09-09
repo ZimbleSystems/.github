@@ -314,10 +314,20 @@ jobs:
           ORG:                     ${{ github.repository_owner }}
           TOKEN:                   ${{ steps.generate_github_app_token.outputs.token }}
           BATCH:                   ${{ toJson(matrix.batch) }}
+          JOB_INDEX:               ${{ strategy.job-index }}
           PROTECTED_BRANCH_REGEX:  ${{ env.PROTECTED_BRANCH_REGEX }}
           TAG_PATTERN_REGEX:       ${{ env.TAG_PATTERN_REGEX }}
         run: |
           set -euo pipefail
+
+          # Every batch writes to a file named after ITS OWN job index, not a
+          # fixed "results.json". The report job downloads every batch's
+          # artifact into one shared folder with merge-multiple: true — if
+          # every artifact contained a same-named file, each download would
+          # silently overwrite the last, leaving only one batch's worth of
+          # repos in the merged results with no error anywhere. Naming this
+          # per-batch is what lets all of them coexist after the merge.
+          RESULTS_FILE="results-${JOB_INDEX}.json"
 
           echo "$BATCH" | jq -c '.[]' > repos.jsonl
           : > results.jsonl
@@ -479,8 +489,8 @@ jobs:
             fi
           done < repos.jsonl
 
-          jq -s '.' results.jsonl > results.json 2>/dev/null || echo '[]' > results.json
-          echo "ℹ️ Batch complete. Repos processed: $(jq 'length' results.json)"
+          jq -s '.' results.jsonl > "$RESULTS_FILE" 2>/dev/null || echo '[]' > "$RESULTS_FILE"
+          echo "ℹ️ Batch complete. Repos processed: $(jq 'length' "$RESULTS_FILE")"
 
       # --------------------------------------------------
       # Step 3: Upload Batch Results
@@ -490,16 +500,22 @@ jobs:
       # writes its results to its own artifact instead — the report job
       # below downloads and merges them. `if: always()` + `if-no-files-found:
       # warn` mean that even if the scan step above somehow still fails
-      # outright, whatever partial results.json exists gets uploaded (or the
+      # outright, whatever partial results file exists gets uploaded (or the
       # batch is just skipped with a warning) rather than one bad batch
-      # silently costing every repo assigned to it.
+      # silently costing every repo assigned to it. The artifact name AND the
+      # file it contains are both keyed by job-index — the report job
+      # downloads every batch's artifact into one shared folder with
+      # merge-multiple: true, and if every artifact held a same-named file
+      # (e.g. results.json), each download would silently clobber the last,
+      # leaving only one batch's repos in the merged report with no error
+      # anywhere to point at why.
 
       - name: Upload Batch Results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name:               branch-linearity-batch-${{ strategy.job-index }}
-          path:               results.json
+          path:               results-${{ strategy.job-index }}.json
           retention-days:     14
           if-no-files-found:  warn
 
