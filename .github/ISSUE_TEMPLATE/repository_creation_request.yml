@@ -25,6 +25,7 @@ body:
         - pos-management
         - reconciliation
         - switching
+        - poc
     validations:
       required: true
 
