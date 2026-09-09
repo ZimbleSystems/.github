@@ -626,6 +626,16 @@ jobs:
             const NONLINEAR_BADGE = badge("history", "non-linear", "red");
             const VIOLATION_BADGE = badge("history", "non-linear", "critical");
 
+            // Repo-level severity badges for the top-of-report rollup table
+            // (below): GitHub strips row/cell background colors from
+            // rendered Markdown, so a badge is what actually carries the
+            // "this repo matters more" signal. A deliberately darker shade
+            // for a repo with at least one PROTECTED violation (the real
+            // policy breach) vs. a lighter shade for a repo whose non-linear
+            // refs are all unprotected (informational, not a breach).
+            const SEVERITY_PROTECTED_BADGE   = badge("severity", "protected-violation", "b30000");
+            const SEVERITY_UNPROTECTED_BADGE = badge("severity", "unprotected-only", "ffb300");
+
             function historyCell(hasLinearHistory, isViolation) {
               if (isViolation) return VIOLATION_BADGE;
               return hasLinearHistory ? LINEAR_BADGE : NONLINEAR_BADGE;
@@ -780,14 +790,6 @@ jobs:
               );
             }
 
-            // Protected first, then repo, then ref name — a policy breach
-            // never gets buried below purely-informational non-linear
-            // branches in this rollup.
-            allViolations.sort((a, b) => {
-              if (a.protected !== b.protected) return a.protected ? -1 : 1;
-              if (a.repo !== b.repo) return a.repo.localeCompare(b.repo);
-              return a.ref.localeCompare(b.ref);
-            });
             const protectedViolationCount = allViolations.filter(v => v.protected).length;
 
             header.push(
@@ -798,18 +800,57 @@ jobs:
             );
 
             if (allViolations.length > 0) {
+              // Group every violating ref by repo so the rollup table reads
+              // as one block per repo instead of interleaved rows — GitHub
+              // Markdown tables have no real rowspan, so a blank repo/
+              // severity cell on every row after a group's first is the
+              // closest a Markdown table gets to Excel's merged cells.
+              const violationsByRepo = new Map();
+              for (const v of allViolations) {
+                if (!violationsByRepo.has(v.repo)) {
+                  violationsByRepo.set(v.repo, { htmlUrl: v.htmlUrl, refs: [] });
+                }
+                violationsByRepo.get(v.repo).refs.push(v);
+              }
+
+              const repoGroups = Array.from(violationsByRepo.entries()).map(([repo, data]) => {
+                // Protected refs first within the group, so the actual
+                // policy breach (if any) is the first thing seen for that repo.
+                data.refs.sort((a, b) => {
+                  if (a.protected !== b.protected) return a.protected ? -1 : 1;
+                  return a.ref.localeCompare(b.ref);
+                });
+                return { repo, htmlUrl: data.htmlUrl, refs: data.refs, hasProtected: data.refs.some(r => r.protected) };
+              });
+
+              // Repos with a protected violation sort to the top as a block
+              // (the darker severity badge below matches this ordering),
+              // then alphabetically within each severity tier.
+              repoGroups.sort((a, b) => {
+                if (a.hasProtected !== b.hasProtected) return a.hasProtected ? -1 : 1;
+                return a.repo.localeCompare(b.repo);
+              });
+
               header.push(
                 "### 🚨 Non-Linear History Violations",
                 "",
-                "Every branch or tag with at least one merge commit in its history, across every scanned repo — not just protected ones. " +
-                  "🚨🛡️ marks a **protected ref** (a branch matching `PROTECTED_BRANCH_REGEX`, or any tag in this report — every tag here already " +
-                  "matched the release pattern `TAG_PATTERN_REGEX`): a non-linear history there is a policy violation, not just information.",
+                "Every branch or tag with at least one merge commit in its history, grouped by repo — not just protected ones. " +
+                  "The **severity** badge is repo-level: a darker red `protected-violation` badge means at least one of that repo's " +
+                  "non-linear refs is protected (a real policy breach, listed first); a lighter amber `unprotected-only` badge means " +
+                  "every non-linear ref there is unprotected (informational). 🚨🛡️ on an individual ref marks it as protected — " +
+                  "a branch matching `PROTECTED_BRANCH_REGEX`, or any tag in this report (every tag here already matched the release " +
+                  "pattern `TAG_PATTERN_REGEX`).",
                 "",
-                "| Repo | Ref | Type | Merge Commits |",
-                "| --- | --- | --- | --- |"
+                "| Repo | Severity | Ref | Type | Merge Commits |",
+                "| --- | --- | --- | --- | --- |"
               );
-              for (const v of allViolations) {
-                header.push(`| [\`${v.repo}\`](${v.htmlUrl}) | ${refLabel(v.ref, v.protected, false)} | ${v.refType} | ${mergeCell(v)} |`);
+              for (const g of repoGroups) {
+                const severityBadge = g.hasProtected ? SEVERITY_PROTECTED_BADGE : SEVERITY_UNPROTECTED_BADGE;
+                g.refs.forEach((v, i) => {
+                  const repoCell     = i === 0 ? `[\`${g.repo}\`](${g.htmlUrl})` : "";
+                  const severityCell = i === 0 ? severityBadge : "";
+                  header.push(`| ${repoCell} | ${severityCell} | ${refLabel(v.ref, v.protected, false)} | ${v.refType} | ${mergeCell(v)} |`);
+                });
               }
               header.push("");
             }
