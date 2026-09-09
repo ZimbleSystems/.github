@@ -544,6 +544,8 @@ jobs:
           ORG:                    ${{ github.repository_owner }}
           PROTECTED_BRANCH_REGEX: ${{ env.PROTECTED_BRANCH_REGEX }}
           TAG_PATTERN_REGEX:      ${{ env.TAG_PATTERN_REGEX }}
+          TOTAL_ELIGIBLE:         ${{ needs.discover_repositories.outputs.total }}
+          SCAN_JOB_RESULT:        ${{ needs.scan_repositories.result }}
         with:
           script: |
             const fs   = require("fs");
@@ -589,6 +591,26 @@ jobs:
 
             repos.sort((a, b) => a.repo.localeCompare(b.repo));
             core.info(`Repos in report : ${repos.length}`);
+
+            // Defense-in-depth against a partial report looking like a
+            // complete one: if the scan job was cancelled/superseded (e.g.
+            // by a newer dispatch hitting the workflow's concurrency group)
+            // partway through, or otherwise didn't finish every batch, this
+            // step still runs (needed for a best-effort report on genuine
+            // per-repo failures) but the repo count here would silently fall
+            // short of what discovery found. Comparing the two and shouting
+            // about any gap is what makes that visible instead of the report
+            // quietly reading as "complete" with most repos missing.
+            const totalEligible = parseInt(process.env.TOTAL_ELIGIBLE || "0", 10) || 0;
+            const scanJobResult = process.env.SCAN_JOB_RESULT || "unknown";
+            const incomplete    = totalEligible > 0 && repos.length < totalEligible;
+
+            if (incomplete) {
+              core.warning(
+                `Incomplete scan: report covers ${repos.length} of ${totalEligible} eligible repos ` +
+                `(scan job result: ${scanJobResult}). See the job summary for details.`
+              );
+            }
 
             const repoLines = [];
             const violations = [];
@@ -653,11 +675,22 @@ jobs:
               `Protected branches: \`${process.env.PROTECTED_BRANCH_REGEX}\`. Tags analyzed: those matching \`${process.env.TAG_PATTERN_REGEX}\` (semver releases).`,
               "A history is **linear** only when none of its commits — from the root to the tip — is a merge commit.",
               "",
+            ];
+
+            if (incomplete) {
+              header.push(
+                `> ⚠️ **Incomplete scan** — this report covers only ${repos.length} of ${totalEligible} eligible repositories (scan job result: \`${scanJobResult}\`).`,
+                "> This usually means the run was cancelled or superseded by a newer dispatch before every batch finished. Check the \"Scan Batch For Branch & Tag Linearity\" job logs for this run, or re-run the workflow.",
+                ""
+              );
+            }
+
+            header.push(
               "| Repos scanned | Branches scanned | Tags scanned | Fully linear branches | Fully linear tags | Protected violations | Repos with errors |",
               "| --- | --- | --- | --- | --- | --- | --- |",
               `| ${repos.length} | ${totalBranches} | ${totalTags} | ${linearBranches} / ${totalBranches} | ${linearTags} / ${totalTags} | ${violations.length} | ${reposWithErrors} |`,
-              "",
-            ];
+              ""
+            );
 
             if (violations.length > 0) {
               header.push("> 🚨 **Protected branch violations found:**");
