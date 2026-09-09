@@ -623,6 +623,15 @@ jobs:
             const path    = require("path");
             const ExcelJS = require("exceljs");
 
+            // Unique file names — the date + run number embedded in both
+            // paths below — so downloading reports from several runs into
+            // the same folder never overwrites an earlier one.
+            const runNumber    = context.runNumber;
+            const dateStamp    = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, UTC
+            const uniqueSuffix = `${dateStamp}-run${runNumber}`;
+            const mdPath       = `non-linear-refs-report-${uniqueSuffix}.md`;
+            const xlsxPath     = `non-linear-refs-violations-${uniqueSuffix}.xlsx`;
+
             // Color coding, done as shields.io badges — GitHub strips inline
             // CSS from rendered Markdown, so a real badge image is what
             // actually reads as "green = fine, red = not fine" rather than
@@ -892,7 +901,7 @@ jobs:
               }
               header.push(
                 "",
-                "📎 A color-formatted Excel version of this table (`non-linear-refs-violations.xlsx`, with real merged repo/severity " +
+                `📎 A color-formatted Excel version of this table (\`${xlsxPath}\`, with real merged repo/severity ` +
                   "cells and real cell colors — this Markdown table can only approximate both) is attached to this run's artifacts.",
                 ""
               );
@@ -990,30 +999,35 @@ jobs:
 
               sheet.autoFilter = { from: "A1", to: "F1" };
 
-              const xlsxPath = "non-linear-refs-violations.xlsx";
               await workbook.xlsx.writeFile(xlsxPath);
+              core.setOutput("xlsx_path", xlsxPath);
               core.info(`✅ Excel violations summary written to ${xlsxPath} (${allViolations.length} row(s))`);
             }
 
             const report = [...header, ...repoLines].join("\n");
 
-            fs.writeFileSync("non-linear-refs-report.md", report);
+            fs.writeFileSync(mdPath, report);
+            core.setOutput("report_path", mdPath);
 
             if (process.env.GITHUB_STEP_SUMMARY) {
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + "\n");
             }
 
-            core.info(`✅ Report written to non-linear-refs-report.md and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
+            core.info(`✅ Report written to ${mdPath} and the job summary (${allViolations.length} violation(s), ${protectedViolationCount} on protected refs)`);
 
       # --------------------------------------------------
       # Step 4: Upload Full Report
       # --------------------------------------------------
+      # The file name itself (not just the artifact's display name) carries
+      # the date and run number — steps.build_report.outputs.report_path —
+      # so downloading reports from several runs into one folder never
+      # overwrites an earlier one.
 
       - name: Upload Full Report
         uses: actions/upload-artifact@v7
         with:
           name:           non-linear-refs-report
-          path:           non-linear-refs-report.md
+          path:           ${{ steps.build_report.outputs.report_path }}
           retention-days: 30
 
       # --------------------------------------------------
@@ -1040,6 +1054,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name:               non-linear-refs-violations-xlsx
-          path:               non-linear-refs-violations.xlsx
+          path:               ${{ steps.build_report.outputs.xlsx_path }}
           retention-days:     30
           if-no-files-found:  warn
