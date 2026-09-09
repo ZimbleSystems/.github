@@ -824,6 +824,12 @@ jobs:
 
             const protectedViolationCount = allViolations.filter(v => v.protected).length;
 
+            // Lets "Upload Excel Violations Summary" (below) decide, via
+            // `if:`, whether to run at all — a run with zero violations
+            // never writes the .xlsx, so that step shouldn't even attempt
+            // it rather than running and immediately finding nothing.
+            core.setOutput("has_violations", allViolations.length > 0 ? "true" : "false");
+
             header.push(
               "| Repos scanned | Branches scanned | Tags scanned | Fully linear branches | Fully linear tags | Total violations | Protected violations | Repos with errors |",
               "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -1021,11 +1027,16 @@ jobs:
       # No `if: always()` here — matches "Upload Full Report" right below,
       # which also has none: if the report-building step fails outright,
       # neither artifact uploads, rather than one surviving and the other
-      # not. `if-no-files-found: warn` alone is what covers the ordinary
-      # zero-violations case — that's not a failure, the step still runs,
-      # there's just no .xlsx to attach, so warn instead of erroring.
+      # not. On top of that, `has_violations` (set by that step) skips this
+      # one outright on an ordinary zero-violations run — no .xlsx was ever
+      # written, so there's nothing to even attempt uploading, rather than
+      # running the step just to have it warn about a file that was never
+      # going to exist. `if-no-files-found: warn` stays on as a safety net
+      # for the one case that condition doesn't cover: has_violations came
+      # back true but the file still isn't there for some other reason.
 
       - name: Upload Excel Violations Summary
+        if: success() && steps.build_report.outputs.has_violations == 'true'
         uses: actions/upload-artifact@v7
         with:
           name:               non-linear-refs-violations-xlsx
