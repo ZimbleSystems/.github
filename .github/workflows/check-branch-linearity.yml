@@ -117,16 +117,18 @@ jobs:
               return;
             }
 
-            // Single eligibility gate shared by both modes (DRY). A repo with
-            // no commits can't be cloned, a disabled repo can't be reached,
-            // and forks/archived repos are opt-in since they rarely need
-            // governance checks.
-            function isEligible(repo) {
-              if (repo.disabled) return false;
-              if (repo.size === 0) return false;
-              if (!includeArchived && repo.archived) return false;
-              if (!includeForks && repo.fork) return false;
-              return true;
+            // Single eligibility check shared by both modes (DRY) — returns
+            // the specific reason a repo is ineligible, or null when it's
+            // fine to scan. Both bulk and selective route every repo
+            // through this one function, so the reason a repo was skipped
+            // can never drift between the two modes or say something vaguer
+            // than what was actually checked.
+            function ineligibilityReason(repo) {
+              if (repo.disabled) return "disabled";
+              if (repo.size === 0) return "empty (no commits)";
+              if (!includeArchived && repo.archived) return "archived";
+              if (!includeForks && repo.fork) return "fork";
+              return null;
             }
 
             function toTarget(repo) {
@@ -140,8 +142,16 @@ jobs:
 
             const fs = require("fs");
 
-            let repos   = [];
-            let skipped = [];
+            let repos = [];
+
+            // Two distinct categories, never merged into one bucket: a repo
+            // that EXISTS but fails the eligibility gate (skipped, always
+            // with the specific reason from ineligibilityReason) vs. one
+            // that couldn't be resolved at all — not found, no access, a
+            // typo (invalid; only possible in selective mode, since bulk
+            // mode only ever sees repos the org actually has).
+            const skippedIneligible = [];
+            const invalidRepos      = [];
 
             if (mode === "bulk") {
               core.info("Fetching all repositories in the organization...");
@@ -151,7 +161,14 @@ jobs:
                 { org, per_page: 100, sort: "full_name", direction: "asc", type: "all" }
               );
 
-              repos = allRepos.filter(isEligible).map(toTarget);
+              for (const repo of allRepos) {
+                const reason = ineligibilityReason(repo);
+                if (reason) {
+                  skippedIneligible.push({ name: repo.name, htmlUrl: repo.html_url, reason });
+                  continue;
+                }
+                repos.push(toTarget(repo));
+              }
 
               core.info(`Eligible repos : ${repos.length} (of ${allRepos.length} total)`);
 
@@ -172,35 +189,31 @@ jobs:
                 return;
               }
 
-              const validRepos = [];
-
               for (const repo of inputRepos) {
+                let data;
                 try {
-                  const { data } = await github.rest.repos.get({ owner: org, repo });
-
-                  if (!isEligible(data)) {
-                    core.warning(`Skipping ineligible repo : ${repo} (archived/fork/disabled/empty)`);
-                    skipped.push(repo);
-                    continue;
-                  }
-
-                  validRepos.push(toTarget(data));
+                  ({ data } = await github.rest.repos.get({ owner: org, repo }));
                 } catch (err) {
-                  core.warning(`Invalid or inaccessible repo : ${repo}`);
-                  skipped.push(repo);
+                  const reason = err.message || "not found or inaccessible";
+                  core.warning(`Invalid or inaccessible repo : ${repo} (${reason})`);
+                  invalidRepos.push({ name: repo, reason });
+                  continue;
                 }
+
+                const reason = ineligibilityReason(data);
+                if (reason) {
+                  core.warning(`Skipping ineligible repo : ${repo} (${reason})`);
+                  skippedIneligible.push({ name: data.name, htmlUrl: data.html_url, reason });
+                  continue;
+                }
+
+                repos.push(toTarget(data));
               }
 
-              if (validRepos.length === 0) {
+              if (repos.length === 0) {
                 core.setFailed("No valid repositories found from input");
                 return;
               }
-
-              if (skipped.length > 0) {
-                core.warning(`Skipped repos : ${skipped.join(", ")}`);
-              }
-
-              repos = validRepos;
             }
 
             // One repo per line rather than one long comma-joined string —
@@ -209,8 +222,21 @@ jobs:
             core.info(`Final repos to scan (${repos.length}):\n${repoListText}`);
             core.setOutput("repos", JSON.stringify(repos));
 
+            if (skippedIneligible.length > 0) {
+              const skippedListText = skippedIneligible.map(s => `  - ${s.name} (${s.reason})`).join("\n");
+              core.info(`Skipped ineligible repos (${skippedIneligible.length}):\n${skippedListText}`);
+            }
+
+            if (invalidRepos.length > 0) {
+              const invalidListText = invalidRepos.map(s => `  - ${s.name} (${s.reason})`).join("\n");
+              core.info(`Invalid or inaccessible repos (${invalidRepos.length}):\n${invalidListText}`);
+            }
+
             // Job step summary: the same eligible-repo list, rendered as a
             // Markdown table + linked list instead of buried in the raw log.
+            // Skipped and invalid repos each get their own section — one
+            // entry per line, carrying the specific reason — instead of one
+            // comma-joined blob that hid both which repo and why.
             if (process.env.GITHUB_STEP_SUMMARY) {
               const summaryLines = [
                 "### 🎯 Target Repositories",
@@ -225,8 +251,16 @@ jobs:
                 summaryLines.push(...repos.map(r => `- [${r.name}](${r.htmlUrl})`), "");
               }
 
-              if (skipped.length > 0) {
-                summaryLines.push(`> ⚠️ Skipped (ineligible or invalid): ${skipped.join(", ")}`, "");
+              if (skippedIneligible.length > 0) {
+                summaryLines.push(`> ⚠️ **Skipped (ineligible)** — ${skippedIneligible.length}:`);
+                summaryLines.push(...skippedIneligible.map(s => `> - [\`${s.name}\`](${s.htmlUrl}) — ${s.reason}`));
+                summaryLines.push("");
+              }
+
+              if (invalidRepos.length > 0) {
+                summaryLines.push(`> ❌ **Invalid or inaccessible** — ${invalidRepos.length}:`);
+                summaryLines.push(...invalidRepos.map(s => `> - \`${s.name}\` — ${s.reason}`));
+                summaryLines.push("");
               }
 
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryLines.join("\n") + "\n");
