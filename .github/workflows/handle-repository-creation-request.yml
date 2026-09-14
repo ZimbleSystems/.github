@@ -56,6 +56,14 @@ jobs:
       secrets_success: ${{ steps.sync_repository_secrets.outputs.success }}
       secrets_error: ${{ steps.sync_repository_secrets.outputs.error }}
 
+      # Exposed at job level (rather than just used step-to-step) so the separate
+      # align_forked_repository_settings job below can read them via `needs.provision_repository.outputs`.
+      final_name: ${{ steps.validate_request.outputs.final_name }}
+      description: ${{ steps.validate_request.outputs.description }}
+      visibility: ${{ steps.validate_request.outputs.visibility }}
+      fork_source_owner: ${{ steps.validate_request.outputs.fork_source_owner }}
+      fork_source_repo: ${{ steps.validate_request.outputs.fork_source_repo }}
+
     steps:
       # TODO: try actions/create-github-app-token@v3 in place of tibdex/github-app-token@v2
       #? tibdex/github-app-token@v2 is archived and perhaps lacks maintenance
@@ -465,29 +473,17 @@ jobs:
                 });
 
                 // repos.createFork doesn't accept description/visibility/merge-strategy options up
-                // front - and a fork's visibility generally follows its source repo - so best-effort
-                // align what we can afterwards. The fork itself (the primary deliverable) already
-                // succeeded above, so a failure here is reported as a warning within the success
-                // message rather than failing this step.
-                let alignmentNote = "";
-                try {
-                  await github.rest.repos.update({
-                    owner: context.repo.owner,
-                    repo: process.env.FINAL_NAME,
-                    description: process.env.DESCRIPTION,
-                    visibility: process.env.VISIBILITY,
-                    allow_merge_commit: false,
-                    allow_squash_merge: false,
-                    allow_update_branch: true
-                  });
-                } catch (e) {
-                  alignmentNote = `\n\n⚠️ Forked repository created, but description/visibility/merge settings could not be fully aligned: ${e.message}`;
-                }
-
+                // front - and GitHub forks a repo's content in the background, so calling
+                // repos.update right away frequently fails with "A previous repository operation is
+                // still in progress." Rather than attempting that alignment here (and either
+                // blocking this step with retries, or reporting a false-alarm warning on the first
+                // failed attempt), it's handled by the separate, later "align_forked_repository_settings"
+                // job, which polls with backoff and reports its own result as a follow-up issue
+                // comment once the fork has settled.
                 core.setOutput("status", "OK");
                 core.setOutput(
                   "success",
-                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}${alignmentNote}`
+                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}\n\nℹ️ Description/visibility/merge settings are being aligned in the background (GitHub forks content asynchronously) - a follow-up comment will confirm once that's done.`
                 );
               } else {
                 const repo = await github.rest.repos.createInOrg({
@@ -804,6 +800,114 @@ jobs:
               core.setOutput("status", "ERROR");
               core.setOutput("error", `⚠️ Failed to sync secrets.\n\nError: ${e.message}`);
             }
+
+  # Runs independently of update_issue_status below (both just `needs: provision_repository`, so
+  # they run in parallel rather than one blocking the other) - this job polls, with backoff, for the
+  # forked repo's description/visibility/merge settings to be alignable, since GitHub forks a repo's
+  # content asynchronously and repos.update calls made too soon fail with "A previous repository
+  # operation is still in progress." It reports its own result as a follow-up issue comment once
+  # resolved (success or final failure), rather than making the main "repository created" comment
+  # wait on it.
+  align_forked_repository_settings:
+    name: Align Forked Repository Settings
+    needs: provision_repository
+    if: >
+      needs.provision_repository.result == 'success' &&
+      needs.provision_repository.outputs.create_status == 'OK' &&
+      needs.provision_repository.outputs.fork_source_owner != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate GitHub App Token
+        id: generate_github_app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID || vars.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY || vars.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Wait For Fork To Settle, Then Align Settings
+        id: align_settings
+        uses: actions/github-script@v9
+        env:
+          FINAL_NAME: ${{ needs.provision_repository.outputs.final_name }}
+          DESCRIPTION: ${{ needs.provision_repository.outputs.description }}
+          VISIBILITY: ${{ needs.provision_repository.outputs.visibility }}
+        with:
+          github-token: ${{ steps.generate_github_app_token.outputs.token }}
+          script: |
+            function sleep(ms) {
+              return new Promise(resolve => setTimeout(resolve, ms));
+            }
+
+            // Retry with linear-then-capped backoff: 10s, 20s, 30s, 40s, 50s, then 60s per attempt
+            // up to MAX_ATTEMPTS - roughly 7.5 minutes of headroom in total, which comfortably
+            // covers typical GitHub fork-content-copy times for small/medium repos. Only the known
+            // transient "previous operation in progress" error is retried; anything else fails fast.
+            const MAX_ATTEMPTS = 10;
+            const BASE_DELAY_MS = 10_000;
+            const MAX_DELAY_MS = 60_000;
+
+            let lastError = null;
+            let lastAttempt = 0;
+
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              lastAttempt = attempt;
+              try {
+                await github.rest.repos.update({
+                  owner: context.repo.owner,
+                  repo: process.env.FINAL_NAME,
+                  description: process.env.DESCRIPTION,
+                  visibility: process.env.VISIBILITY,
+                  allow_merge_commit: false,
+                  allow_squash_merge: false,
+                  allow_update_branch: true
+                });
+
+                core.setOutput("status", "OK");
+                core.setOutput(
+                  "success",
+                  `✅ Forked repository settings (description/visibility/merge options) aligned successfully for \`${process.env.FINAL_NAME}\` (attempt ${attempt}/${MAX_ATTEMPTS}).`
+                );
+                return;
+              } catch (e) {
+                lastError = e;
+
+                const isTransient = /previous repository operation is still in progress/i.test(e.message || "");
+
+                if (!isTransient || attempt === MAX_ATTEMPTS) {
+                  break;
+                }
+
+                await sleep(Math.min(BASE_DELAY_MS * attempt, MAX_DELAY_MS));
+              }
+            }
+
+            const msg = `⚠️ Forked repository \`${process.env.FINAL_NAME}\` was created, but its description/visibility/merge settings could not be aligned (gave up after ${lastAttempt}/${MAX_ATTEMPTS} attempt(s)).
+
+            Error: ${lastError?.message}
+
+            👉 You may need to update these settings manually, or contact the platform team if this keeps happening.
+            `;
+            core.setOutput("status", "ERROR");
+            core.setOutput("error", msg);
+
+      - name: Comment Alignment Result on Issue
+        uses: actions/github-script@v9
+        env:
+          STATUS: ${{ steps.align_settings.outputs.status }}
+          SUCCESS_MSG: ${{ steps.align_settings.outputs.success }}
+          ERROR_MSG: ${{ steps.align_settings.outputs.error }}
+        with:
+          script: |
+            const body = process.env.STATUS === "OK" ? process.env.SUCCESS_MSG : process.env.ERROR_MSG;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
 
   update_issue_status:
     name: Update Issue Status
