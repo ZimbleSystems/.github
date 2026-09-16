@@ -724,7 +724,7 @@ jobs:
                         allow_forking: false
                       });
                     } catch (e) {
-                      restoreNote += `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually.`;
+                      restoreNote += `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually, and contact the platform team if you're not able to.`;
                     }
                   }
 
@@ -735,7 +735,7 @@ jobs:
                         members_can_fork_private_repos: false
                       });
                     } catch (e) {
-                      restoreNote += `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable it manually in organization settings.`;
+                      restoreNote += `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable it manually in organization settings, and contact the platform team if you're not able to.`;
                     }
                   }
                 }
