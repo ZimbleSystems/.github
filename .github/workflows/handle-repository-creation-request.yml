@@ -156,37 +156,113 @@ jobs:
               return;
             }
 
-            // Single source of truth for dropdown option lists and the org-variable allow-list -
-            // read from the checked-out working copy (see the "Checkout Repository" step above)
-            // rather than hardcoded here, so both stay reusable/editable without touching this
-            // script - and without spending a GitHub API call on fetching it every run. See the
-            // config file itself for the template/config sync caveat.
+            // Dropdown option lists are parsed directly out of the issue template file itself
+            // (.github/ISSUE_TEMPLATE/repository_creation_request.yml) rather than kept in a second
+            // copy - the template's `options:` lists are the only place those values are ever
+            // written, so there is nothing left to keep in sync by hand. The org-variable allow-list
+            // has no natural home in the issue template (it isn't a field a requester fills in), so
+            // it still lives in its own small JSON config file. Both are read from the checked-out
+            // working copy (see the "Checkout Repository" step above) rather than a GitHub API call.
             const fs = require("fs");
+            const TEMPLATE_PATH = ".github/ISSUE_TEMPLATE/repository_creation_request.yml";
             const CONFIG_PATH = ".github/config/repository-creation-options.json";
-            let config;
 
-            try {
-              config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-            } catch (e) {
+            function reportConfigError(path, detail) {
               const msg = `🛠️ Configuration Load Failed (this is not a requester error)
 
-            This workflow could not load its options configuration from \`${CONFIG_PATH}\`.
+            This workflow could not load its configuration from \`${path}\`.
 
-            Error: ${e.message}
+            ${detail}
 
             👉 Requester: no action needed on your part - please notify the platform team.
-            👉 Platform team: confirm \`${CONFIG_PATH}\` exists in this repository and is valid JSON.
+            👉 Platform team: confirm \`${path}\` exists in this repository and is valid.
             `;
               core.setOutput("status", "CONFIG_ERROR");
               core.setOutput("error", msg);
               core.setOutput("warning", JSON.stringify([]));
               core.setOutput("info", JSON.stringify([]));
+            }
+
+            let config;
+            try {
+              config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+            } catch (e) {
+              reportConfigError(CONFIG_PATH, `Error: ${e.message}`);
+              return;
+            }
+            const COPIABLE_ORG_VARIABLES = config.copiable_org_variables || [];
+            core.setOutput("copiable_org_variables", JSON.stringify(COPIABLE_ORG_VARIABLES));
+
+            // Hand-rolled line scanner (not a full YAML parser, so no extra npm-install dependency)
+            // that pulls the flat list of `- option` strings out of a `type: dropdown` field's
+            // `options:` block, given that field's `id:`. It only needs to understand the small
+            // subset of YAML shape this template actually uses:
+            //   - blank lines separate option "groups" within a single options: list (cosmetic only)
+            //   - a trailing `# comment` on an option line is stripped
+            //   - a bare `---` divider or `--- Category ---` marker line is a non-selectable heading,
+            //     not a real option, and is skipped
+            //   - the options: block ends at the next `- type:` (next field), a dedent (e.g.
+            //     `default:`/`validations:` closing this field's attributes), or any line that isn't
+            //     a `- value` list item
+            function extractDropdownOptions(lines, fieldId) {
+              const idLineIdx = lines.findIndex(l => new RegExp(`^\\s*id:\\s*${fieldId}\\s*$`).test(l));
+              if (idLineIdx === -1) return null;
+
+              let optionsLineIdx = -1;
+              for (let i = idLineIdx + 1; i < lines.length; i++) {
+                if (/^\s*-\s*type:/.test(lines[i])) break;
+                if (/^\s*options:\s*$/.test(lines[i])) { optionsLineIdx = i; break; }
+              }
+              if (optionsLineIdx === -1) return null;
+
+              const optionsIndent = lines[optionsLineIdx].match(/^(\s*)/)[1].length;
+              const values = [];
+
+              for (let i = optionsLineIdx + 1; i < lines.length; i++) {
+                const line = lines[i];
+                if (/^\s*$/.test(line)) continue; // blank line = cosmetic group separator
+
+                const indent = line.match(/^(\s*)/)[1].length;
+                if (indent <= optionsIndent) break; // dedent = end of this options: block
+
+                const dashMatch = line.match(/^\s*-\s*(.+?)\s*$/);
+                if (!dashMatch) break; // not a list item = end of this options: block
+
+                const value = dashMatch[1].replace(/\s+#.*$/, "").trim();
+                if (value && !value.startsWith("---") && !/^-+$/.test(value)) {
+                  values.push(value);
+                }
+              }
+              return values;
+            }
+
+            let templateLines;
+            try {
+              templateLines = fs.readFileSync(TEMPLATE_PATH, "utf8").split("\n");
+            } catch (e) {
+              reportConfigError(TEMPLATE_PATH, `Error: ${e.message}`);
               return;
             }
 
-            const DROPDOWN_OPTIONS = config.dropdown_options || {};
-            const COPIABLE_ORG_VARIABLES = config.copiable_org_variables || [];
-            core.setOutput("copiable_org_variables", JSON.stringify(COPIABLE_ORG_VARIABLES));
+            const DROPDOWN_FIELD_IDS = ["product_line", "aspect", "project_type", "tenant_name", "visibility"];
+            const DROPDOWN_OPTIONS = {};
+            const unparsableDropdownFields = [];
+
+            for (const fieldId of DROPDOWN_FIELD_IDS) {
+              const values = extractDropdownOptions(templateLines, fieldId);
+              if (!values || values.length === 0) {
+                unparsableDropdownFields.push(fieldId);
+              }
+              DROPDOWN_OPTIONS[fieldId] = values || [];
+            }
+
+            if (unparsableDropdownFields.length > 0) {
+              reportConfigError(
+                TEMPLATE_PATH,
+                `Could not parse the dropdown option list for field id(s): ${unparsableDropdownFields.map(f => `\`${f}\``).join(", ")}. This usually means a field's \`id:\` or \`options:\` structure was changed in a way the workflow's \`extractDropdownOptions(...)\` parser doesn't recognize - reconcile the two.`
+              );
+              return;
+            }
 
             let errors = [];
             let warnings = [];
