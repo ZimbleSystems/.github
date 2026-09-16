@@ -185,8 +185,14 @@ jobs:
             // Org-level variables copied down into every newly created/forked repository. This has
             // no natural home in the issue template (it isn't a field a requester fills in) and isn't
             // worth a whole extra file for a five-item allow-list, so it's just a plain constant -
-            // this line is the one and only place to edit it.
-            const COPIABLE_ORG_VARIABLES = ["GH_APP_CLIENT_ID", "GH_APP_ID", "GITLAB_HOST", "GITLAB_MY_ORG_SUBGROUP", "GITLAB_TOP_LEVEL_GROUP_ID"];
+            // this list is the one and only place to edit it (add/remove a line to change it).
+            const COPIABLE_ORG_VARIABLES = [
+              "GH_APP_CLIENT_ID",
+              "GH_APP_ID",
+              "GITLAB_HOST",
+              "GITLAB_MY_ORG_SUBGROUP",
+              "GITLAB_TOP_LEVEL_GROUP_ID"
+            ];
             core.setOutput("copiable_org_variables", JSON.stringify(COPIABLE_ORG_VARIABLES));
 
             // Hand-rolled line scanner (not a full YAML parser, so no extra npm-install dependency)
