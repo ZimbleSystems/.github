@@ -296,7 +296,6 @@ jobs:
             const visibilityRaw  = extract("Repository Visibility");
             let forkSourceUrlRaw = extract("Source Repository URL \\(Optional - for forking\\)");
             // const repoOptions = extract("Repository Options \\(Optional\\)"); // removed with README-init logic
-            let tenantRaw        = extract("Tenant Name \\(Optional\\)");
             let initiativeRaw    = extract("Initiative \\(Optional\\)");
 
             if (projectType && projectType.startsWith("---")) {
@@ -305,6 +304,8 @@ jobs:
 
             // Same "None"/"_No response_" normalization as Tenant Name below - see that comment for
             // why both must be read as "not answered" rather than validated as a selected value.
+            // Extracted (and this flag resolved) before Tenant Name below, specifically so the
+            // decision of whether to even bother extracting Tenant Name can depend on it.
             const initiativeAnswered = initiativeRaw && initiativeRaw !== "_No response_" && initiativeRaw !== "None";
 
             if (!initiativeRaw || initiativeRaw === "_No response_" || initiativeRaw === "None") {
@@ -313,6 +314,19 @@ jobs:
 
             const initiative = initiativeRaw === "None" ? null : initiativeRaw;
 
+            // A valid Initiative selection takes full precedence over Tenant Name - it's not just
+            // that Initiative "wins" in the final repo name, Tenant Name is completely ignored: not
+            // extracted from the issue body at all (there's nothing to do with the value even if we
+            // had it), not validated against its own option list below, not included in the final
+            // repo name, not set as REPO_METADATA_TENANT, and not added as a tenant-* topic (see
+            // further down). Skipping the extract() call entirely - rather than extracting it and
+            // then discarding the result - is safe specifically because template-drift detection for
+            // the "Tenant Name (Optional)" heading does NOT depend on this extract() call: it's
+            // already verified unconditionally, for every submission regardless of Initiative, by the
+            // TEMPLATE_FIELD_LABELS/headingExists() check above - so drift on that field is still
+            // caught even when its value is never looked at here.
+            let tenantRaw = initiativeAnswered ? null : extract("Tenant Name \\(Optional\\)");
+
             // Neither "_No response_" (GitHub's placeholder for an unanswered text/textarea field)
             // nor "None" is a real tenant selection, so both are treated as "no tenant" rather than
             // run through the option-list check below (which would otherwise reject them as invalid
@@ -320,7 +334,8 @@ jobs:
             // This matters even with an explicit "None" option in the template: GitHub renders the
             // literal text "None" for this field whenever it's left untouched and optional, whether
             // or not "None" is one of the field's own listed options - so it must always be read as
-            // "no tenant", never validated as a selected value.
+            // "no tenant", never validated as a selected value. A `null` tenantRaw (Initiative
+            // answered, so extraction was skipped above) falls into this same "no tenant" bucket.
             const tenantAnswered = tenantRaw && tenantRaw !== "_No response_" && tenantRaw !== "None";
 
             if (!tenantRaw || tenantRaw === "_No response_" || tenantRaw === "None") {
@@ -328,14 +343,6 @@ jobs:
             }
 
             let tenant = tenantRaw === "None" ? null : tenantRaw;
-
-            // A valid Initiative selection takes full precedence over Tenant Name - it's not just
-            // that Initiative "wins" in the final repo name, Tenant Name is completely ignored: not
-            // validated against its own option list below, not included in the final repo name, not
-            // set as REPO_METADATA_TENANT, and not added as a tenant-* topic (see further down).
-            if (initiativeAnswered) {
-              tenant = null;
-            }
 
             if (!forkSourceUrlRaw || forkSourceUrlRaw === "_No response_") {
               forkSourceUrlRaw = null;
