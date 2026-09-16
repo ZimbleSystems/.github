@@ -51,6 +51,7 @@ jobs:
       org_vars_success: ${{ steps.copy_organization_variables.outputs.success }}
       org_vars_error: ${{ steps.copy_organization_variables.outputs.error }}
       org_vars_info: ${{ steps.copy_organization_variables.outputs.info }}
+      org_vars_warning: ${{ steps.copy_organization_variables.outputs.warning }}
 
       secrets_status: ${{ steps.sync_repository_secrets.outputs.status }}
       secrets_success: ${{ steps.sync_repository_secrets.outputs.success }}
@@ -148,8 +149,59 @@ jobs:
               return;
             }
 
+            // Single source of truth for dropdown option lists and the org-variable allow-list -
+            // fetched at runtime rather than hardcoded here, so both stay reusable/editable without
+            // touching this script. See the file itself for the template/config sync caveat.
+            const CONFIG_PATH = ".github/config/repository-creation-options.json";
+            let config;
+
+            try {
+              const { data: configFile } = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path: CONFIG_PATH
+              });
+              config = JSON.parse(Buffer.from(configFile.content, configFile.encoding || "base64").toString("utf8"));
+            } catch (e) {
+              const msg = `🛠️ Configuration Fetch Failed (this is not a requester error)
+
+            This workflow could not load its options configuration from \`${CONFIG_PATH}\`.
+
+            Error: ${e.message}
+
+            👉 Requester: no action needed on your part - please notify the platform team.
+            👉 Platform team: confirm \`${CONFIG_PATH}\` exists in this repository and is valid JSON.
+            `;
+              core.setOutput("status", "CONFIG_ERROR");
+              core.setOutput("error", msg);
+              core.setOutput("warning", JSON.stringify([]));
+              core.setOutput("info", JSON.stringify([]));
+              return;
+            }
+
+            const DROPDOWN_OPTIONS = config.dropdown_options || {};
+            const COPIABLE_ORG_VARIABLES = config.copiable_org_variables || [];
+            core.setOutput("copiable_org_variables", JSON.stringify(COPIABLE_ORG_VARIABLES));
+
             let errors = [];
             let warnings = [];
+
+            // Flags a value that isn't blank but doesn't exactly match one of the option list's
+            // entries (a blank/missing value is reported separately by the "Missing: <field>"
+            // checks below, so this intentionally no-ops on falsy values).
+            function validateDropdownValue(fieldLabel, value, validOptions) {
+              if (!value) return;
+              if (!validOptions.includes(value)) {
+                errors.push(
+            `❌ Invalid ${fieldLabel} selected.
+
+            Got: "${value}"
+
+            👉 Valid options:
+            ${validOptions.map(o => `- \`${o}\``).join("\n")}`
+                );
+              }
+            }
 
             const product        = extract("Product Line");
             const aspect         = extract("Aspect / Domain");
@@ -159,15 +211,22 @@ jobs:
             const visibilityRaw  = extract("Repository Visibility");
             let forkSourceUrlRaw = extract("Source Repository URL \\(Optional - for forking\\)");
             // const repoOptions = extract("Repository Options \\(Optional\\)"); // removed with README-init logic
-            let tenant           = extract("Tenant Name \\(Optional\\)");
+            let tenantRaw        = extract("Tenant Name \\(Optional\\)");
 
             if (projectType && projectType.startsWith("---")) {
-              errors.push("❌ Invalid Project Type selected. Please choose a valid option.");
+              errors.push("❌ Invalid Project Type selected - that's a category marker, not a real option. Please choose an actual project type.");
             }
 
-            if (!tenant || tenant === "_No response_" || tenant === "None") {
-              tenant = null;
+            // "_No response_" is GitHub's own placeholder for an unanswered optional field - not a
+            // real dropdown value, so it's treated as "no tenant" rather than run through the
+            // option-list check below (which would otherwise reject it as invalid).
+            const tenantAnswered = tenantRaw && tenantRaw !== "_No response_";
+
+            if (!tenantRaw || tenantRaw === "_No response_" || tenantRaw === "None") {
+              tenantRaw = "None";
             }
+
+            let tenant = tenantRaw === "None" ? null : tenantRaw;
 
             if (!forkSourceUrlRaw || forkSourceUrlRaw === "_No response_") {
               forkSourceUrlRaw = null;
@@ -179,15 +238,39 @@ jobs:
             if (!projectType) errors.push("❌ Missing: Project Type");
             if (!descriptionRaw) errors.push("❌ Missing: Repository Description");
 
+            // Every dropdown-driven field's value must exactly match one of the options the issue
+            // template actually offers (see CONFIG_PATH above) - this catches a tampered/edited issue
+            // body, not anything a requester can trigger through the dropdown UI itself.
+            validateDropdownValue("Product Line", product, DROPDOWN_OPTIONS.product_line || []);
+            validateDropdownValue("Aspect / Domain", aspect, DROPDOWN_OPTIONS.aspect || []);
+            if (projectType && !projectType.startsWith("---")) {
+              validateDropdownValue("Project Type", projectType, DROPDOWN_OPTIONS.project_type || []);
+            }
+            validateDropdownValue("Repository Visibility", visibilityRaw, DROPDOWN_OPTIONS.visibility || []);
+            if (tenantAnswered) {
+              validateDropdownValue("Tenant Name", tenantRaw, DROPDOWN_OPTIONS.tenant_name || []);
+            }
+
             if (name && !/^[a-z0-9-]+$/.test(name)) {
               errors.push("❌ Repository name must be kebab-case (lowercase, numbers, hyphens only).");
             }
 
-            let visibility;
-            if (visibilityRaw?.includes("Private")) visibility = "private";
-            else if (visibilityRaw?.includes("Public")) visibility = "public";
-            else if (visibilityRaw?.includes("Internal")) visibility = "internal";
-            else errors.push("❌ Invalid visibility option selected.");
+            // Description is free text (it's meant to be a readable sentence, not an identifier), so
+            // it isn't restricted to kebab-case - but it's still blocked from carrying characters that
+            // have historically been abused for injection (backticks/$/angle-brackets/backslashes/
+            // control characters), as defense in depth for anywhere this value ends up rendered or
+            // processed downstream.
+            const DANGEROUS_DESCRIPTION_CHARS = /[`$<>\\\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/;
+            if (descriptionRaw && DANGEROUS_DESCRIPTION_CHARS.test(descriptionRaw)) {
+              errors.push("❌ Repository Description contains characters that are not allowed (backticks, $, <, >, backslashes, or control characters). Please remove them and try again.");
+            }
+
+            const VISIBILITY_CODE_MAP = {
+              "Private": "private",
+              "Public": "public",
+              "Internal (Enterprise only)": "internal"
+            };
+            const visibility = VISIBILITY_CODE_MAP[visibilityRaw];
 
             // README-initialization support was removed when this fork feature was added - see the
             // commented-out "Repository Options (Optional)" field in the issue template.
@@ -465,25 +548,72 @@ jobs:
               const isFork = !!process.env.FORK_SOURCE_OWNER;
 
               if (isFork) {
-                const forked = await github.rest.repos.createFork({
-                  owner: process.env.FORK_SOURCE_OWNER,
-                  repo: process.env.FORK_SOURCE_REPO,
-                  organization: context.repo.owner,
-                  name: process.env.FINAL_NAME
-                });
+                // If the fork source is another repo in this same org, GitHub won't let us fork it
+                // while its own "Allow forking" setting is off. Rather than failing, temporarily
+                // enable forking on the source just long enough to fork it, then restore it back to
+                // disabled - regardless of whether the fork call itself succeeds (finally).
+                const isSameOrgSource = process.env.FORK_SOURCE_OWNER === context.repo.owner;
+                let sourceForkingWasEnabledByUs = false;
 
-                // repos.createFork doesn't accept description/visibility/merge-strategy options up
-                // front - and GitHub forks a repo's content in the background, so calling
+                if (isSameOrgSource) {
+                  try {
+                    const { data: sourceRepo } = await github.rest.repos.get({
+                      owner: process.env.FORK_SOURCE_OWNER,
+                      repo: process.env.FORK_SOURCE_REPO
+                    });
+
+                    if (sourceRepo.allow_forking === false) {
+                      await github.rest.repos.update({
+                        owner: process.env.FORK_SOURCE_OWNER,
+                        repo: process.env.FORK_SOURCE_REPO,
+                        allow_forking: true
+                      });
+                      sourceForkingWasEnabledByUs = true;
+                    }
+                  } catch (e) {
+                    // Don't block the overall attempt on this check/toggle failing - if forking
+                    // genuinely isn't possible, the createFork call below will fail with its own
+                    // clear error anyway.
+                  }
+                }
+
+                let restoreNote = "";
+
+                let forked;
+                try {
+                  forked = await github.rest.repos.createFork({
+                    owner: process.env.FORK_SOURCE_OWNER,
+                    repo: process.env.FORK_SOURCE_REPO,
+                    organization: context.repo.owner,
+                    name: process.env.FINAL_NAME
+                  });
+                } finally {
+                  if (sourceForkingWasEnabledByUs) {
+                    try {
+                      await github.rest.repos.update({
+                        owner: process.env.FORK_SOURCE_OWNER,
+                        repo: process.env.FORK_SOURCE_REPO,
+                        allow_forking: false
+                      });
+                    } catch (e) {
+                      restoreNote = `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually.`;
+                    }
+                  }
+                }
+
+                // repos.createFork doesn't accept description/visibility/merge-strategy/allow_forking
+                // options up front - and GitHub forks a repo's content in the background, so calling
                 // repos.update right away frequently fails with "A previous repository operation is
                 // still in progress." Rather than attempting that alignment here (and either
                 // blocking this step with retries, or reporting a false-alarm warning on the first
                 // failed attempt), it's handled by the separate, later "align_forked_repository_settings"
-                // job, which polls with backoff and reports its own result as a follow-up issue
-                // comment once the fork has settled.
+                // job, which polls with backoff (and also sets allow_forking: false on the new fork -
+                // see point 4/5 in the workflow's change history) and reports its own result as a
+                // follow-up issue comment once the fork has settled.
                 core.setOutput("status", "OK");
                 core.setOutput(
                   "success",
-                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}\n\nℹ️ Description/visibility/merge settings are being aligned in the background (GitHub forks content asynchronously) - a follow-up comment will confirm once that's done.`
+                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}\n\nℹ️ Description/visibility/merge settings (and disabling forking on the new repo) are being aligned in the background (GitHub forks content asynchronously) - a follow-up comment will confirm once that's done.${restoreNote}`
                 );
               } else {
                 const repo = await github.rest.repos.createInOrg({
@@ -493,7 +623,11 @@ jobs:
                   visibility: process.env.VISIBILITY,
                   allow_merge_commit: false,
                   allow_squash_merge: false,
-                  allow_update_branch: true
+                  allow_update_branch: true,
+                  // Repos this workflow creates are never forkable by default, regardless of
+                  // visibility - GitHub does support disabling forking on public repos too (not just
+                  // private/internal), so this applies uniformly.
+                  allow_forking: false
                   // auto_init / README-initialization removed - see the commented-out
                   // "Repository Options (Optional)" field in the issue template.
                 });
@@ -607,13 +741,19 @@ jobs:
         uses: actions/github-script@v9
         env:
           FINAL_NAME: ${{ steps.validate_request.outputs.final_name }}
+          COPIABLE_VARS: ${{ steps.validate_request.outputs.copiable_org_variables }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
+            // Only these org-level variables are ever copied down to a newly created/forked repo -
+            // the allow-list itself lives in .github/config/repository-creation-options.json (fetched
+            // once by "Validate Issue Input" and passed forward here), not hardcoded in this script.
+            // Every other org variable is ignored entirely, regardless of its visibility setting.
+            const allowList = JSON.parse(process.env.COPIABLE_VARS || "[]");
+
             let failures = [];
             let skipped = [];
             let successCount = 0;
-            let total = 0;
 
             let allVars;
 
@@ -632,17 +772,15 @@ jobs:
               return;
             }
 
-            if (!allVars || allVars.length === 0) {
-              core.setOutput("status", "OK");
-              core.setOutput("info", JSON.stringify(["ℹ️ No organization variables found."]));
-              return;
-            }
+            const varsByName = new Map((allVars || []).map(v => [v.name, v]));
 
-            for (const v of allVars) {
-              total++;
+            for (const name of allowList) {
+              const v = varsByName.get(name);
+
+              if (!v) continue; // reported separately below, as "missing"
 
               if (v.visibility === "selected") {
-                skipped.push(v.name);
+                skipped.push(name);
                 continue;
               }
 
@@ -655,20 +793,31 @@ jobs:
                 });
                 successCount++;
               } catch (e) {
-                failures.push(`Variable: ${v.name}\nError: ${e.message}`);
+                failures.push(`Variable: ${name}\nError: ${e.message}`);
               }
             }
 
-            let infoMsg = "";
+            const missing = allowList.filter(name => !varsByName.has(name));
 
+            let infoMsg = "";
             if (skipped.length > 0) {
               infoMsg = `ℹ️ Skipped organization variables with restricted visibility ("selected"):
 
             ${skipped.join("\n")}
             `;
             }
-
             core.setOutput("info", infoMsg);
+
+            let warningMsg = "";
+            if (missing.length > 0) {
+              warningMsg = `⚠️ The following organization variable(s) are configured to be copied into new repositories, but were not found at the organization level:
+
+            ${missing.map(n => `- ${n}`).join("\n")}
+
+            👉 Please ask the platform team to define ${missing.length > 1 ? "these organization variables" : "this organization variable"}.
+            `;
+            }
+            core.setOutput("warning", warningMsg);
 
             if (failures.length === 0) {
               core.setOutput("status", "OK");
@@ -678,9 +827,10 @@ jobs:
 
             Repository: ${process.env.FINAL_NAME}
 
-            Total Variables: ${total}
+            Allow-listed: ${allowList.length}
             Successfully Copied: ${successCount}
             Skipped (restricted): ${skipped.length}
+            Missing at org level: ${missing.length}
             Failed: ${failures.length}
 
             Failure details:
@@ -861,13 +1011,17 @@ jobs:
                   visibility: process.env.VISIBILITY,
                   allow_merge_commit: false,
                   allow_squash_merge: false,
-                  allow_update_branch: true
+                  allow_update_branch: true,
+                  // Forked repos are never forkable by default either, same as freshly created ones
+                  // (see the non-fork branch of the "Create Repository" step) - this couldn't be set
+                  // at fork time since repos.createFork doesn't accept it.
+                  allow_forking: false
                 });
 
                 core.setOutput("status", "OK");
                 core.setOutput(
                   "success",
-                  `✅ Forked repository settings (description/visibility/merge options) aligned successfully for \`${process.env.FINAL_NAME}\` (attempt ${attempt}/${MAX_ATTEMPTS}).`
+                  `✅ Forked repository settings (description/visibility/merge options, forking disabled) aligned successfully for \`${process.env.FINAL_NAME}\` (attempt ${attempt}/${MAX_ATTEMPTS}).`
                 );
                 return;
               } catch (e) {
@@ -883,7 +1037,7 @@ jobs:
               }
             }
 
-            const msg = `⚠️ Forked repository \`${process.env.FINAL_NAME}\` was created, but its description/visibility/merge settings could not be aligned (gave up after ${lastAttempt}/${MAX_ATTEMPTS} attempt(s)).
+            const msg = `⚠️ Forked repository \`${process.env.FINAL_NAME}\` was created, but its description/visibility/merge settings (including disabling forking) could not be aligned (gave up after ${lastAttempt}/${MAX_ATTEMPTS} attempt(s)).
 
             Error: ${lastError?.message}
 
@@ -989,7 +1143,9 @@ jobs:
               }
             }
 
-            if (d.validate_status === "PARSE_ERROR" || d.validate_status === "TEMPLATE_MISMATCH") {
+            if (d.validate_status === "PARSE_ERROR"
+             || d.validate_status === "TEMPLATE_MISMATCH"
+             || d.validate_status === "CONFIG_ERROR") {
               errors.push(d.validate_error);
             } else {
               if (d.validate_success) success.push(d.validate_success);
@@ -1023,6 +1179,7 @@ jobs:
             if (d.secrets_status === "ERROR") warnings.push(d.secrets_error)
             else if (d.secrets_status === "OK") success.push(d.secrets_success);
 
+            if (d.org_vars_warning) warnings.push(d.org_vars_warning);
             if (d.org_vars_info) info.push(d.org_vars_info);
 
             let body = "";

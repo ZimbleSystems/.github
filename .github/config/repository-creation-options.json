@@ -1,0 +1,35 @@
+{
+  "$comment": "Single source of truth for the repository-creation issue template's dropdown options and the org-level variables copied into newly created/forked repos. Read at runtime by handle-repository-creation-request.yml (the 'Validate Issue Input' step, via the GitHub Contents API) so those lists are not hardcoded in the workflow script. NOTE: the issue template (.github/ISSUE_TEMPLATE/repository_creation_request.yml) still hardcodes its own dropdown option lists too, since GitHub issue forms are static YAML and cannot read this file at render time - keep the two in sync by hand whenever either changes.",
+
+  "dropdown_options": {
+    "product_line": ["common", "ewallet", "hyperconfigurator", "pos-management", "reconciliation", "switching", "poc"],
+    "aspect": ["backend", "frontend", "endpoint", "platform", "testing", "documentation", "data"],
+    "project_type": [
+      "java-maven-library", "nodejs-express-app", "python-pyproject-app", "quarkus-maven-extension",
+      "quarkus-maven-jdk-app", "quarkus-maven-native-app", "spring-maven-jdk-app", "spring-maven-native-app",
+
+      "flutter-webapp", "nextjs-webapp",
+
+      "flutter-android-app", "flutter-ios-app", "flutter-windows-app", "golang-windows-app",
+
+      "cicd-util-scripts", "container-definition", "gitops", "helm-charts", "local-util-scripts",
+      "python-pyproject", "python-scripts", "terraform-modules", "terraform-scripts",
+
+      "appium-java-scripts", "appium-js-scripts", "appium-py-scripts", "playwright-scripts",
+
+      "doc",
+
+      "data-etl-pipeline", "data-warehouse-scripts", "data-analytics-app"
+    ],
+    "tenant_name": ["None", "7eleven", "mercadia", "petro7", "telcel"],
+    "visibility": ["Private", "Public", "Internal (Enterprise only)"]
+  },
+
+  "copiable_org_variables": [
+    "GH_APP_CLIENT_ID",
+    "GH_APP_ID",
+    "GITLAB_HOST",
+    "GITLAB_MY_ORG_SUBGROUP",
+    "GITLAB_TOP_LEVEL_GROUP_ID"
+  ]
+}
