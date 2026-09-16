@@ -66,6 +66,13 @@ jobs:
       fork_source_repo: ${{ steps.validate_request.outputs.fork_source_repo }}
 
     steps:
+      # Checked out purely so "Validate Issue Input" can read repository-creation-options.json
+      # straight off disk (fs.readFileSync) instead of spending a GitHub REST API call
+      # (repos.getContent) on it every run - a plain shallow checkout of this small repo is cheaper
+      # and doesn't touch API rate limits at all.
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       # TODO: try actions/create-github-app-token@v3 in place of tibdex/github-app-token@v2
       #? tibdex/github-app-token@v2 is archived and perhaps lacks maintenance
       #? tibdex/github-app-token@v2 is running on Node.js 20 for which github runner support will be removed on September 16th, 2026.
@@ -150,20 +157,18 @@ jobs:
             }
 
             // Single source of truth for dropdown option lists and the org-variable allow-list -
-            // fetched at runtime rather than hardcoded here, so both stay reusable/editable without
-            // touching this script. See the file itself for the template/config sync caveat.
+            // read from the checked-out working copy (see the "Checkout Repository" step above)
+            // rather than hardcoded here, so both stay reusable/editable without touching this
+            // script - and without spending a GitHub API call on fetching it every run. See the
+            // config file itself for the template/config sync caveat.
+            const fs = require("fs");
             const CONFIG_PATH = ".github/config/repository-creation-options.json";
             let config;
 
             try {
-              const { data: configFile } = await github.rest.repos.getContent({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                path: CONFIG_PATH
-              });
-              config = JSON.parse(Buffer.from(configFile.content, configFile.encoding || "base64").toString("utf8"));
+              config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
             } catch (e) {
-              const msg = `🛠️ Configuration Fetch Failed (this is not a requester error)
+              const msg = `🛠️ Configuration Load Failed (this is not a requester error)
 
             This workflow could not load its options configuration from \`${CONFIG_PATH}\`.
 
