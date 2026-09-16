@@ -118,6 +118,7 @@ jobs:
             // it). Detect that drift explicitly so it surfaces as an obvious platform-team issue
             // rather than a confusing "Missing: <field>" message aimed at the requester.
             const TEMPLATE_FIELD_LABELS = [
+              "Initiative \\(Optional\\)",
               "Product Line",
               "Aspect / Domain",
               "Repository Name",
@@ -247,7 +248,7 @@ jobs:
               return;
             }
 
-            const DROPDOWN_FIELD_IDS = ["product_line", "aspect", "project_type", "tenant_name", "visibility"];
+            const DROPDOWN_FIELD_IDS = ["product_line", "aspect", "project_type", "tenant_name", "visibility", "initiative"];
             const DROPDOWN_OPTIONS = {};
             const unparsableDropdownFields = [];
 
@@ -296,10 +297,21 @@ jobs:
             let forkSourceUrlRaw = extract("Source Repository URL \\(Optional - for forking\\)");
             // const repoOptions = extract("Repository Options \\(Optional\\)"); // removed with README-init logic
             let tenantRaw        = extract("Tenant Name \\(Optional\\)");
+            let initiativeRaw    = extract("Initiative \\(Optional\\)");
 
             if (projectType && projectType.startsWith("---")) {
               errors.push("❌ Invalid Project Type selected - that's a category marker, not a real option. Please choose an actual project type.");
             }
+
+            // Same "None"/"_No response_" normalization as Tenant Name below - see that comment for
+            // why both must be read as "not answered" rather than validated as a selected value.
+            const initiativeAnswered = initiativeRaw && initiativeRaw !== "_No response_" && initiativeRaw !== "None";
+
+            if (!initiativeRaw || initiativeRaw === "_No response_" || initiativeRaw === "None") {
+              initiativeRaw = "None";
+            }
+
+            const initiative = initiativeRaw === "None" ? null : initiativeRaw;
 
             // Neither "_No response_" (GitHub's placeholder for an unanswered text/textarea field)
             // nor "None" is a real tenant selection, so both are treated as "no tenant" rather than
@@ -316,6 +328,14 @@ jobs:
             }
 
             let tenant = tenantRaw === "None" ? null : tenantRaw;
+
+            // A valid Initiative selection takes full precedence over Tenant Name - it's not just
+            // that Initiative "wins" in the final repo name, Tenant Name is completely ignored: not
+            // validated against its own option list below, not included in the final repo name, not
+            // set as REPO_METADATA_TENANT, and not added as a tenant-* topic (see further down).
+            if (initiativeAnswered) {
+              tenant = null;
+            }
 
             if (!forkSourceUrlRaw || forkSourceUrlRaw === "_No response_") {
               forkSourceUrlRaw = null;
@@ -336,7 +356,13 @@ jobs:
               validateDropdownValue("Project Type", projectType, DROPDOWN_OPTIONS.project_type || []);
             }
             validateDropdownValue("Repository Visibility", visibilityRaw, DROPDOWN_OPTIONS.visibility || []);
-            if (tenantAnswered) {
+            if (initiativeAnswered) {
+              validateDropdownValue("Initiative", initiativeRaw, DROPDOWN_OPTIONS.initiative || []);
+            }
+            // Tenant Name is skipped entirely (not even validated) once Initiative has a valid
+            // answer - it's fully ignored in that case, per the note above where `tenant` is forced
+            // to null, so there's nothing to gain from also flagging it as invalid here.
+            if (tenantAnswered && !initiativeAnswered) {
               validateDropdownValue("Tenant Name", tenantRaw, DROPDOWN_OPTIONS.tenant_name || []);
             }
 
@@ -434,6 +460,10 @@ jobs:
                 `type-${sanitize(projectType)}`
               ];
 
+              // Initiative and Tenant Name are mutually exclusive as topics too, mirroring the
+              // metadata variable below - `tenant` is already forced to null above whenever
+              // Initiative was answered, so this "if (tenant)" naturally never fires in that case.
+              if (initiative) topics.push(`initiative-${sanitize(initiative)}`);
               if (tenant) topics.push(`tenant-${sanitize(tenant)}`);
 
               const longTopics = topics.filter(t => t.length > 50);
@@ -458,7 +488,12 @@ jobs:
               REPO_METADATA_ASPECT: aspect,
               REPO_METADATA_NAME: name,
               REPO_METADATA_TYPE: projectType,
+              // Mutually exclusive - `tenant` is already forced to null above whenever Initiative
+              // was answered, and the "Set Repository Metadata Variables" step skips any metadata
+              // value that comes out null/undefined here, so at most one of these two ever actually
+              // gets created as a repo variable.
               REPO_METADATA_TENANT: tenant,
+              REPO_METADATA_INITIATIVE: initiative,
               REPO_METADATA_MANAGED: true
             };
 

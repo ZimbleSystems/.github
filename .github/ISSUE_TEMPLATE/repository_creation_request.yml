@@ -16,6 +16,19 @@ body:
         posted back here as a comment on this issue.
 
   - type: dropdown
+    id: initiative
+    attributes:
+      label: Initiative (Optional)
+      description: >-
+        Select an initiative if this repository belongs to one (choose "None" if not applicable).
+        When set, this takes precedence over Tenant Name below - Tenant Name is ignored entirely
+        for repositories tied to an initiative.
+      options:
+        - khasak
+    validations:
+      required: false
+
+  - type: dropdown
     id: product_line
     attributes:
       label: Product Line
@@ -28,6 +41,12 @@ body:
         - reconciliation
         - switching
         - poc
+        - fin-auth-issuer
+        - fin-auth-aquirer
+        - fin-auth-merch
+        - keyplane
+        - instruments
+        - notifications
     validations:
       required: true
 
