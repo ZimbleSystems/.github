@@ -648,6 +648,7 @@ jobs:
                 // to fail outright if the source has forking disabled.
                 const isSameOrgSource = process.env.FORK_SOURCE_OWNER.toLowerCase() === context.repo.owner.toLowerCase();
                 let sourceForkingWasEnabledByUs = false;
+                let orgForkingWasEnabledByUs = false;
 
                 if (isSameOrgSource) {
                   try {
@@ -655,6 +656,37 @@ jobs:
                       owner: process.env.FORK_SOURCE_OWNER,
                       repo: process.env.FORK_SOURCE_REPO
                     });
+
+                    // GitHub also blocks forking at the organization level - separately from the
+                    // repository's own "Allow forking" setting above - via the org's "Allow forking
+                    // of private repositories" member privilege. That org policy only ever applies to
+                    // non-public (private/internal) source repos - forking a public repo is never
+                    // subject to it - so it's only checked/toggled here for those two visibilities.
+                    // (GitHub's org settings surface a single "private repositories" control for
+                    // this, which - per GitHub's own org settings UI - also governs internal repos;
+                    // if this org's plan ever exposes a distinct internal-repos control the REST API
+                    // doesn't cover, this toggle will no-op for it and createFork below will still
+                    // fail with its own clear error, same as any other untoggleable case.)
+                    const sourceVisibility = sourceRepo.visibility || (sourceRepo.private ? "private" : "public");
+
+                    if (sourceVisibility === "private" || sourceVisibility === "internal") {
+                      try {
+                        const { data: org } = await github.rest.orgs.get({ org: context.repo.owner });
+
+                        if (org.members_can_fork_private_repos === false) {
+                          await github.rest.orgs.update({
+                            org: context.repo.owner,
+                            members_can_fork_private_repos: true
+                          });
+                          orgForkingWasEnabledByUs = true;
+                        }
+                      } catch (e) {
+                        // Best-effort, same reasoning as the repo-level toggle below - e.g. the
+                        // GitHub App may lack "Organization administration" (write) permission. Let
+                        // createFork fail naturally with its own error if this genuinely can't be
+                        // toggled.
+                      }
+                    }
 
                     if (sourceRepo.allow_forking === false) {
                       await github.rest.repos.update({
@@ -682,6 +714,8 @@ jobs:
                     name: process.env.FINAL_NAME
                   });
                 } finally {
+                  // Restored in the reverse order they were enabled: repo-level first, then the
+                  // broader org-level policy - regardless of whether the fork itself succeeded.
                   if (sourceForkingWasEnabledByUs) {
                     try {
                       await github.rest.repos.update({
@@ -690,7 +724,18 @@ jobs:
                         allow_forking: false
                       });
                     } catch (e) {
-                      restoreNote = `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually.`;
+                      restoreNote += `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually.`;
+                    }
+                  }
+
+                  if (orgForkingWasEnabledByUs) {
+                    try {
+                      await github.rest.orgs.update({
+                        org: context.repo.owner,
+                        members_can_fork_private_repos: false
+                      });
+                    } catch (e) {
+                      restoreNote += `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable it manually in organization settings.`;
                     }
                   }
                 }
