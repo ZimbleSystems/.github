@@ -64,7 +64,7 @@ jobs:
       visibility: ${{ steps.validate_request.outputs.visibility }}
       fork_source_owner: ${{ steps.validate_request.outputs.fork_source_owner }}
       fork_source_repo: ${{ steps.validate_request.outputs.fork_source_repo }}
-      org_forking_enabled_by_us: ${{ steps.create_repository.outputs.org_forking_enabled_by_us }}
+      org_forking_needs_retry_disable: ${{ steps.create_repository.outputs.org_forking_needs_retry_disable }}
 
     steps:
       # Checked out purely so "Validate Issue Input" can read the issue template
@@ -705,6 +705,7 @@ jobs:
                 }
 
                 let restoreNote = "";
+                let orgForkingNeedsRetryDisable = false;
 
                 let forked;
                 try {
@@ -715,15 +716,8 @@ jobs:
                     name: process.env.FINAL_NAME
                   });
                 } finally {
-                  // Only the source repo's own "Allow forking" setting is restored here, right away -
-                  // that only ever gated *creating* the fork, which has already happened by this
-                  // point, so there's no reason to leave it enabled any longer.
-                  //
-                  // The broader org-level "Allow forking of private repositories" policy is
-                  // deliberately NOT restored here, even though it was enabled in this same block
-                  // above - see the comment on ORG_FORKING_ENABLED_BY_US in the
-                  // align_forked_repository_settings job below for why disabling it this early
-                  // breaks that job's settings alignment.
+                  // Both toggles are restored here, right away, regardless of whether the fork call
+                  // itself succeeded.
                   if (sourceForkingWasEnabledByUs) {
                     try {
                       await github.rest.repos.update({
@@ -735,26 +729,50 @@ jobs:
                       restoreNote += `\n\n⚠️ Forking was temporarily enabled on source repository \`${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}\` to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable forking on that repository manually, and contact the platform team if you're not able to.`;
                     }
                   }
+
+                  // Disabling this org-wide policy right away (rather than deferring it) is safe:
+                  // the align_forked_repository_settings job below no longer touches the new fork's
+                  // own `allow_forking` field for this exact reason - once this org policy is back
+                  // off, forking is already blocked org-wide for every private/internal repo
+                  // (including this new one), and if the new repo ends up public, GitHub doesn't
+                  // support disabling forking on a forked repo regardless of this org setting - so
+                  // there's nothing left for that job to need this policy still enabled for.
+                  //
+                  // If this restore attempt fails, we don't want to just warn and move on - it's
+                  // retried once more, automatically, by the align_forked_repository_settings job
+                  // after it finishes aligning the fork's other settings (see
+                  // ORG_FORKING_NEEDS_RETRY_DISABLE there), as a backstop in case this first attempt
+                  // hit a transient error.
+                  if (orgForkingWasEnabledByUs) {
+                    try {
+                      await github.rest.orgs.update({
+                        org: context.repo.owner,
+                        members_can_fork_private_repositories: false
+                      });
+                    } catch (e) {
+                      orgForkingNeedsRetryDisable = true;
+                    }
+                  }
                 }
 
                 // Handed to the align_forked_repository_settings job below (via this step's/job's
-                // outputs) so it - not this step - is responsible for disabling this setting again,
-                // once it's actually done using it.
-                core.setOutput("org_forking_enabled_by_us", orgForkingWasEnabledByUs ? "true" : "false");
+                // outputs) so it retries disabling this org policy if the attempt above just failed -
+                // it's a no-op there when this is "false" (either never enabled, or already
+                // successfully disabled above).
+                core.setOutput("org_forking_needs_retry_disable", orgForkingNeedsRetryDisable ? "true" : "false");
 
-                // repos.createFork doesn't accept description/visibility/merge-strategy/allow_forking
-                // options up front - and GitHub forks a repo's content in the background, so calling
+                // repos.createFork doesn't accept description/visibility/merge-strategy options up
+                // front - and GitHub forks a repo's content in the background, so calling
                 // repos.update right away frequently fails with "A previous repository operation is
                 // still in progress." Rather than attempting that alignment here (and either
                 // blocking this step with retries, or reporting a false-alarm warning on the first
                 // failed attempt), it's handled by the separate, later "align_forked_repository_settings"
-                // job, which polls with backoff (and also sets allow_forking: false on the new fork -
-                // see point 4/5 in the workflow's change history) and reports its own result as a
-                // follow-up issue comment once the fork has settled.
+                // job, which polls with backoff and reports its own result as a follow-up issue
+                // comment once the fork has settled.
                 core.setOutput("status", "OK");
                 core.setOutput(
                   "success",
-                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}\n\nℹ️ Description/visibility/merge settings (and disabling forking on the new repo) are being aligned in the background (GitHub forks content asynchronously) - a follow-up comment will confirm once that's done.${restoreNote}`
+                  `✅ Repository forked successfully from ${process.env.FORK_SOURCE_OWNER}/${process.env.FORK_SOURCE_REPO}.\n\n🔗 ${forked.data.html_url}\n\nℹ️ Description/visibility/merge settings are being aligned in the background (GitHub forks content asynchronously) - a follow-up comment will confirm once that's done.${restoreNote}`
                 );
               } else {
                 const repo = await github.rest.repos.createInOrg({
@@ -1124,7 +1142,7 @@ jobs:
           FINAL_NAME: ${{ needs.provision_repository.outputs.final_name }}
           DESCRIPTION: ${{ needs.provision_repository.outputs.description }}
           VISIBILITY: ${{ needs.provision_repository.outputs.visibility }}
-          ORG_FORKING_ENABLED_BY_US: ${{ needs.provision_repository.outputs.org_forking_enabled_by_us }}
+          ORG_FORKING_NEEDS_RETRY_DISABLE: ${{ needs.provision_repository.outputs.org_forking_needs_retry_disable }}
         with:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
@@ -1144,67 +1162,59 @@ jobs:
             let lastAttempt = 0;
             let alignedOk = false;
 
-            // Whether the "Create Repository" step (in the other job) temporarily enabled the org's
-            // "Allow forking of private repositories" policy to fork a private/internal same-org
-            // source. If so, THIS job - not that one - is responsible for disabling it again, and
-            // only once the retry loop below is completely done with it (see the finally block after
-            // the loop). Disabling it right after the initial createFork call (as the previous
-            // version of this workflow did) reopened this exact failure mode: the repos.update call
-            // below - which still needs to touch a private/internal fork's settings - was rejected
-            // with "This organization does not allow private repository forking" once that org policy
-            // had already been flipped back off, even though the fork itself already existed by then.
-            // GitHub's repos.update also isn't fully atomic across fields in this situation - a
-            // description change can be persisted before a later field in the same call is rejected -
-            // which is why a partial update (description applied, everything else not) was observed
-            // rather than the whole call cleanly failing.
-            const orgForkingEnabledByUs = process.env.ORG_FORKING_ENABLED_BY_US === "true";
-            let orgRestoreNote = "";
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              lastAttempt = attempt;
+              try {
+                await github.rest.repos.update({
+                  owner: context.repo.owner,
+                  repo: process.env.FINAL_NAME,
+                  description: process.env.DESCRIPTION,
+                  visibility: process.env.VISIBILITY,
+                  allow_merge_commit: false,
+                  allow_squash_merge: false,
+                  allow_update_branch: true
+                  // No allow_forking here, deliberately - unlike a freshly created (non-fork) repo,
+                  // a fork's forking-related state is already governed by the "Create Repository"
+                  // step: a private/internal fork is already unforkable once the org-level "Allow
+                  // forking of private repositories" policy is back off (that blocks forking any
+                  // private/internal repo org-wide, this new one included, regardless of its own
+                  // allow_forking value - making a separate per-repo toggle redundant), and GitHub
+                  // doesn't support disabling forking on a repo that is itself a fork when it's
+                  // public. Including allow_forking in this call previously caused GitHub to reject
+                  // the whole update with "This organization does not allow private repository
+                  // forking" whenever the org policy had already been restored to disabled by the
+                  // time this ran - and non-atomically: description had already been persisted before
+                  // that later field was rejected, which is why a partial update was observed.
+                });
 
-            try {
-              for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                lastAttempt = attempt;
-                try {
-                  await github.rest.repos.update({
-                    owner: context.repo.owner,
-                    repo: process.env.FINAL_NAME,
-                    description: process.env.DESCRIPTION,
-                    visibility: process.env.VISIBILITY,
-                    allow_merge_commit: false,
-                    allow_squash_merge: false,
-                    allow_update_branch: true,
-                    // Forked repos are never forkable by default either, same as freshly created ones
-                    // (see the non-fork branch of the "Create Repository" step) - this couldn't be set
-                    // at fork time since repos.createFork doesn't accept it.
-                    allow_forking: false
-                  });
+                alignedOk = true;
+                break;
+              } catch (e) {
+                lastError = e;
 
-                  alignedOk = true;
+                const isTransient = /previous repository operation is still in progress/i.test(e.message || "");
+
+                if (!isTransient || attempt === MAX_ATTEMPTS) {
                   break;
-                } catch (e) {
-                  lastError = e;
-
-                  const isTransient = /previous repository operation is still in progress/i.test(e.message || "");
-
-                  if (!isTransient || attempt === MAX_ATTEMPTS) {
-                    break;
-                  }
-
-                  await sleep(Math.min(BASE_DELAY_MS * attempt, MAX_DELAY_MS));
                 }
+
+                await sleep(Math.min(BASE_DELAY_MS * attempt, MAX_DELAY_MS));
               }
-            } finally {
-              // Attempted exactly once here, after the loop is fully done (success or exhausted) -
-              // never inside the loop itself, so retries of the transient "previous operation in
-              // progress" error aren't affected by it.
-              if (orgForkingEnabledByUs) {
-                try {
-                  await github.rest.orgs.update({
-                    org: context.repo.owner,
-                    members_can_fork_private_repositories: false
-                  });
-                } catch (e) {
-                  orgRestoreNote = `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable it manually in organization settings, and contact the platform team if you're not able to.`;
-                }
+            }
+
+            // Backstop retry: the "Create Repository" step (in the other job) already tried to
+            // disable the org's "Allow forking of private repositories" policy right after forking -
+            // this only runs, once, if that first attempt failed (e.g. a transient API error), so the
+            // org isn't left with that policy stuck enabled just because of one failed call.
+            let orgRestoreNote = "";
+            if (process.env.ORG_FORKING_NEEDS_RETRY_DISABLE === "true") {
+              try {
+                await github.rest.orgs.update({
+                  org: context.repo.owner,
+                  members_can_fork_private_repositories: false
+                });
+              } catch (e) {
+                orgRestoreNote = `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, and could not be re-disabled (even after a retry): ${e.message}. Please disable it manually in organization settings, and contact the platform team if you're not able to.`;
               }
             }
 
@@ -1212,10 +1222,10 @@ jobs:
               core.setOutput("status", "OK");
               core.setOutput(
                 "success",
-                `✅ Forked repository settings (description/visibility/merge options, forking disabled) aligned successfully for \`${process.env.FINAL_NAME}\` (attempt ${lastAttempt}/${MAX_ATTEMPTS}).${orgRestoreNote}`
+                `✅ Forked repository settings (description/visibility/merge options) aligned successfully for \`${process.env.FINAL_NAME}\` (attempt ${lastAttempt}/${MAX_ATTEMPTS}).${orgRestoreNote}`
               );
             } else {
-              const msg = `⚠️ Forked repository \`${process.env.FINAL_NAME}\` was created, but its description/visibility/merge settings (including disabling forking) could not be aligned (gave up after ${lastAttempt}/${MAX_ATTEMPTS} attempt(s)).
+              const msg = `⚠️ Forked repository \`${process.env.FINAL_NAME}\` was created, but its description/visibility/merge settings could not be aligned (gave up after ${lastAttempt}/${MAX_ATTEMPTS} attempt(s)).
 
             Error: ${lastError?.message}
 
