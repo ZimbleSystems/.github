@@ -300,10 +300,15 @@ jobs:
               errors.push("❌ Invalid Project Type selected - that's a category marker, not a real option. Please choose an actual project type.");
             }
 
-            // "_No response_" is GitHub's own placeholder for an unanswered optional field - not a
-            // real dropdown value, so it's treated as "no tenant" rather than run through the
-            // option-list check below (which would otherwise reject it as invalid).
-            const tenantAnswered = tenantRaw && tenantRaw !== "_No response_";
+            // Neither "_No response_" (GitHub's placeholder for an unanswered text/textarea field)
+            // nor "None" is a real tenant selection, so both are treated as "no tenant" rather than
+            // run through the option-list check below (which would otherwise reject them as invalid
+            // whenever the template's own option list doesn't happen to spell out "None" itself).
+            // This matters even with an explicit "None" option in the template: GitHub renders the
+            // literal text "None" for this field whenever it's left untouched and optional, whether
+            // or not "None" is one of the field's own listed options - so it must always be read as
+            // "no tenant", never validated as a selected value.
+            const tenantAnswered = tenantRaw && tenantRaw !== "_No response_" && tenantRaw !== "None";
 
             if (!tenantRaw || tenantRaw === "_No response_" || tenantRaw === "None") {
               tenantRaw = "None";
