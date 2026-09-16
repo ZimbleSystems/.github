@@ -1,5 +1,5 @@
-name: 🏗 Repository Creation Request
-description: Request creation of a new repository under the organization
+name: 🏗 Create or Fork Repository
+description: Automated creation of a brand-new blank repository, or forking any existing reachable repository, under the organization
 title: "[REPO-CREATION-REQUEST] "
 labels: ["repo-creation-request", "platform-triage"]
 type: task
@@ -8,9 +8,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## 📦 Repository Creation Request
+        ## 📦 Create or Fork Repository
 
-        Please complete all required fields. 
+        Please complete all required fields.
         The platform team will review and provision the repository.
 
   - type: dropdown
@@ -112,8 +112,9 @@ body:
       label: Source Repository URL (Optional - for forking)
       description: >-
         If this new repository should be a fork of an existing GitHub repository, paste its URL
-        here. Leave blank to create a new, empty repository instead.
-      placeholder: https://github.com/owner/repo
+        here - HTTPS or SSH, with or without a trailing ".git", are all accepted. Leave blank to
+        create a new, empty repository instead.
+      placeholder: "https://github.com/owner/repo or git@github.com:owner/repo.git"
     validations:
       required: false
 
