@@ -673,10 +673,10 @@ jobs:
                       try {
                         const { data: org } = await github.rest.orgs.get({ org: context.repo.owner });
 
-                        if (org.members_can_fork_private_repos === false) {
+                        if (org.members_can_fork_private_repositories === false) {
                           await github.rest.orgs.update({
                             org: context.repo.owner,
-                            members_can_fork_private_repos: true
+                            members_can_fork_private_repositories: true
                           });
                           orgForkingWasEnabledByUs = true;
                         }
@@ -732,7 +732,7 @@ jobs:
                     try {
                       await github.rest.orgs.update({
                         org: context.repo.owner,
-                        members_can_fork_private_repos: false
+                        members_can_fork_private_repositories: false
                       });
                     } catch (e) {
                       restoreNote += `\n\n⚠️ The organization's "Allow forking of private repositories" setting was temporarily enabled to allow this fork, but re-disabling it afterward failed: ${e.message}. Please disable it manually in organization settings, and contact the platform team if you're not able to.`;
