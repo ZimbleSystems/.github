@@ -635,7 +635,13 @@ jobs:
                 // while its own "Allow forking" setting is off. Rather than failing, temporarily
                 // enable forking on the source just long enough to fork it, then restore it back to
                 // disabled - regardless of whether the fork call itself succeeds (finally).
-                const isSameOrgSource = process.env.FORK_SOURCE_OWNER === context.repo.owner;
+                //
+                // GitHub org/user logins are case-insensitive (merely case-preserving) - "Zimble-GH"
+                // and "zimble-gh" are the same org - so this comparison must not be case-sensitive.
+                // A strict === here would wrongly treat a same-org source pasted with different
+                // casing as a foreign repo and skip the temporary-enable entirely, causing the fork
+                // to fail outright if the source has forking disabled.
+                const isSameOrgSource = process.env.FORK_SOURCE_OWNER.toLowerCase() === context.repo.owner.toLowerCase();
                 let sourceForkingWasEnabledByUs = false;
 
                 if (isSameOrgSource) {
