@@ -66,10 +66,11 @@ jobs:
       fork_source_repo: ${{ steps.validate_request.outputs.fork_source_repo }}
 
     steps:
-      # Checked out purely so "Validate Issue Input" can read repository-creation-options.json
-      # straight off disk (fs.readFileSync) instead of spending a GitHub REST API call
-      # (repos.getContent) on it every run - a plain shallow checkout of this small repo is cheaper
-      # and doesn't touch API rate limits at all.
+      # Checked out purely so "Validate Issue Input" can read the issue template
+      # (.github/ISSUE_TEMPLATE/repository_creation_request.yml) straight off disk
+      # (fs.readFileSync) instead of spending a GitHub REST API call (repos.getContent) on it every
+      # run - a plain shallow checkout of this small repo is cheaper and doesn't touch API rate
+      # limits at all.
       - name: Checkout Repository
         uses: actions/checkout@v4
 
@@ -159,13 +160,11 @@ jobs:
             // Dropdown option lists are parsed directly out of the issue template file itself
             // (.github/ISSUE_TEMPLATE/repository_creation_request.yml) rather than kept in a second
             // copy - the template's `options:` lists are the only place those values are ever
-            // written, so there is nothing left to keep in sync by hand. The org-variable allow-list
-            // has no natural home in the issue template (it isn't a field a requester fills in), so
-            // it still lives in its own small JSON config file. Both are read from the checked-out
-            // working copy (see the "Checkout Repository" step above) rather than a GitHub API call.
+            // written, so there is nothing left to keep in sync by hand. It's read from the
+            // checked-out working copy (see the "Checkout Repository" step above) rather than a
+            // GitHub API call.
             const fs = require("fs");
             const TEMPLATE_PATH = ".github/ISSUE_TEMPLATE/repository_creation_request.yml";
-            const CONFIG_PATH = ".github/config/repository-creation-options.json";
 
             function reportConfigError(path, detail) {
               const msg = `🛠️ Configuration Load Failed (this is not a requester error)
@@ -183,14 +182,11 @@ jobs:
               core.setOutput("info", JSON.stringify([]));
             }
 
-            let config;
-            try {
-              config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-            } catch (e) {
-              reportConfigError(CONFIG_PATH, `Error: ${e.message}`);
-              return;
-            }
-            const COPIABLE_ORG_VARIABLES = config.copiable_org_variables || [];
+            // Org-level variables copied down into every newly created/forked repository. This has
+            // no natural home in the issue template (it isn't a field a requester fills in) and isn't
+            // worth a whole extra file for a five-item allow-list, so it's just a plain constant -
+            // this line is the one and only place to edit it.
+            const COPIABLE_ORG_VARIABLES = ["GH_APP_CLIENT_ID", "GH_APP_ID", "GITLAB_HOST", "GITLAB_MY_ORG_SUBGROUP", "GITLAB_TOP_LEVEL_GROUP_ID"];
             core.setOutput("copiable_org_variables", JSON.stringify(COPIABLE_ORG_VARIABLES));
 
             // Hand-rolled line scanner (not a full YAML parser, so no extra npm-install dependency)
@@ -320,8 +316,8 @@ jobs:
             if (!descriptionRaw) errors.push("❌ Missing: Repository Description");
 
             // Every dropdown-driven field's value must exactly match one of the options the issue
-            // template actually offers (see CONFIG_PATH above) - this catches a tampered/edited issue
-            // body, not anything a requester can trigger through the dropdown UI itself.
+            // template actually offers (see TEMPLATE_PATH above) - this catches a tampered/edited
+            // issue body, not anything a requester can trigger through the dropdown UI itself.
             validateDropdownValue("Product Line", product, DROPDOWN_OPTIONS.product_line || []);
             validateDropdownValue("Aspect / Domain", aspect, DROPDOWN_OPTIONS.aspect || []);
             if (projectType && !projectType.startsWith("---")) {
@@ -827,9 +823,9 @@ jobs:
           github-token: ${{ steps.generate_github_app_token.outputs.token }}
           script: |
             // Only these org-level variables are ever copied down to a newly created/forked repo -
-            // the allow-list itself lives in .github/config/repository-creation-options.json (fetched
-            // once by "Validate Issue Input" and passed forward here), not hardcoded in this script.
-            // Every other org variable is ignored entirely, regardless of its visibility setting.
+            // the allow-list is a constant defined once in "Validate Issue Input" and passed forward
+            // here (see COPIABLE_ORG_VARIABLES there), not re-declared in this script. Every other
+            // org variable is ignored entirely, regardless of its visibility setting.
             const allowList = JSON.parse(process.env.COPIABLE_VARS || "[]");
 
             let failures = [];
