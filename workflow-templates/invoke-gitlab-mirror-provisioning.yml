@@ -9,7 +9,7 @@ on:
 
 jobs:
   mirror:
-    uses: zimble-gh/.github/.github/workflows/provision-gitlab-mirror.yml@main
+    uses: ZimbleSystems/.github/.github/workflows/provision-gitlab-mirror.yml@main
     secrets: inherit
     with:
       force_push: ${{ inputs.force_push }}
