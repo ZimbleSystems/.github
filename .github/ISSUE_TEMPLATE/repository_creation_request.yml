@@ -135,7 +135,7 @@ body:
         If this new repository should be a fork of an existing GitHub repository, paste its URL
         here - HTTPS or SSH, with or without a trailing ".git", are all accepted. Leave blank to
         create a new, empty repository instead.
-      placeholder: "https://github.com/owner/repo or git@github.com:owner/repo.git"
+      placeholder: "https://github.com/owner/repo.git or git@github.com:owner/repo.git"
     validations:
       required: false
 
