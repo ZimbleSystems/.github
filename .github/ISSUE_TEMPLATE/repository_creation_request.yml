@@ -42,8 +42,8 @@ body:
         - switching
         - poc
         - fin-auth-issuer
-        - fin-auth-aquirer
-        - fin-auth-merch
+        - fin-auth-acquirer
+        - fin-auth-merchant
         - keyplane
         - instruments
         - notifications
